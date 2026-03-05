@@ -823,10 +823,11 @@ class PanelEVT:
         p = 1 - confidence_level
 
         # GPD VaR formula
-        if abs(xi) < 1e-6:  # Exponential case
+        if xi == 0:  # Exact zero: use exponential limit to avoid division by zero
             var = threshold + sigma * np.log(zeta_u / p)
         else:
-            var = threshold + (sigma / xi) * ((p / zeta_u)**(-xi) - 1)
+            # Use expm1 for numerical stability when xi is small
+            var = threshold + sigma * np.expm1(-xi * np.log(p / zeta_u)) / xi
 
         return var
 
