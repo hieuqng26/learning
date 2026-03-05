@@ -826,7 +826,7 @@ class PanelEVT:
         if abs(xi) < 1e-6:  # Exponential case
             var = threshold + sigma * np.log(zeta_u / p)
         else:
-            var = threshold + (sigma / xi) * ((zeta_u / p)**(-xi) - 1)
+            var = threshold + (sigma / xi) * ((p / zeta_u)**(-xi) - 1)
 
         return var
 
