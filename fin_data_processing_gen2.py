@@ -506,7 +506,7 @@ class data_processing:
                     ignore_index=True,
                 )
             elif target == "TOTALCOSTOFSALES":
-                target2 = "CoC_Change"
+                target2 = "COGS_Change"
                 globals()[f"final_missing_{target}"][target2] = "Missing"
                 globals()[f"final_{target}"][target2] = globals()[f"final_{target}"][
                     target
@@ -672,7 +672,7 @@ class data_processing:
             ), "Length changed after concating!"
             if len(final_merged) == 0:
                 final_merged = globals()[f"final_{target}"][
-                    columns_needed + [target, "CAPEX", target2]
+                    columns_needed + [target, target2]
                 ]
             else:
                 final_merged_processing = final_merged.copy()
@@ -694,7 +694,7 @@ class data_processing:
                         target2,
                     ]
                     globals()[f"final_{target}"] = globals()[f"final_{target}"][
-                        columns_needed + [target, target2]
+                        columns_needed + [target, "CAPEX", target2]
                     ]
                 globals()[f"final_{target}"] = globals()[f"final_{target}"].rename(
                     columns={
@@ -996,8 +996,8 @@ smry3 = quarter_summary(final.copy(), "standardized_date_of_financials", key_col
 DataStats = pd.DataFrame()
 SpreadIdStats = pd.DataFrame()
 countrylevel = pd.DataFrame()
-final = final[(final[target] != "Missing") & (final[target] != "Not applicable")]
 target = "spread_id"
+final = final[(final[target] != "Missing") & (final[target] != "Not applicable")]
 print(f"No. of samples with valid {target}:", len(final))
 for s in final["Sector"].unique():
     final_by_sector = final[final.Sector == s]
