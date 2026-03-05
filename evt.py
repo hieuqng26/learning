@@ -940,7 +940,14 @@ class EVTBacktester:
     def backtest_crisis(self, segment_name, crisis_years=[2008, 2009],
                        target_percentile=96):
         """
-        Backtest model using financial crisis data.
+        Backtest model using financial crisis data with proper VaR validation methods.
+
+        Implements multiple validation approaches:
+        1. Coverage testing (unconditional coverage) - PRIMARY
+        2. Quantile-to-quantile comparison (with bootstrap CI) - PRIMARY
+        3. Multiple percentile comparison - SECONDARY
+        4. Severity analysis (Expected Shortfall validation) - SECONDARY
+        5. Distributional measures (mean/median) - REFERENCE ONLY
 
         Parameters:
         -----------
@@ -949,11 +956,11 @@ class EVTBacktester:
         crisis_years : list
             Years considered as crisis period
         target_percentile : float
-            Target percentile for comparison (e.g., 96 = 1 in 25)
+            Target percentile for comparison (e.g., 96 = 1 in 25 year event)
 
         Returns:
         --------
-        dict : Backtesting results
+        dict : Comprehensive backtesting results
         """
         segment_data = self.data[self.data[self.evt_model.segment_col] == segment_name]
 
@@ -965,56 +972,205 @@ class EVTBacktester:
             return None
 
         # Get actual crisis values
-        actual_crisis_values = test_data[self.value_col].dropna()
+        actual_crisis_values = test_data[self.value_col].dropna().values
+        n_crisis = len(actual_crisis_values)
 
-        # Get EVT prediction at target percentile
+        # Get predicted VaR and ES
         predicted_var = self.evt_model.calculate_var(
             segment_name,
             target_percentile / 100
         )
-
-        # Calculate metrics
-        mae = mean_absolute_error(
-            actual_crisis_values,
-            [predicted_var] * len(actual_crisis_values)
+        predicted_es = self.evt_model.calculate_es(
+            segment_name,
+            target_percentile / 100
         )
-        rmse = np.sqrt(mean_squared_error(
-            actual_crisis_values,
-            [predicted_var] * len(actual_crisis_values)
-        ))
 
-        # Coverage: what % of crisis observations are below predicted VaR
+        # ========================================================================
+        # APPROACH 1: Coverage Testing (Gold Standard for VaR Validation)
+        # ========================================================================
+        # Question: Does the 96th percentile VaR cover 96% of crisis observations?
+
         coverage = (actual_crisis_values <= predicted_var).mean()
-
-        # Exception rate: what % exceed the predicted VaR
         exception_rate = (actual_crisis_values > predicted_var).mean()
+        n_exceptions = int((actual_crisis_values > predicted_var).sum())
 
-        # Average crisis value
-        avg_crisis_value = actual_crisis_values.mean()
+        # Expected exceptions under the null hypothesis
+        expected_exception_rate = (100 - target_percentile) / 100
+        expected_exceptions = n_crisis * expected_exception_rate
 
-        # Find what percentile the avg crisis value represents
-        model = self.evt_model.segment_models[segment_name]
-        if model['method'] == 'GPD':
-            # Calculate empirical percentile rank in full data
-            all_data = segment_data[self.value_col].dropna()
-            empirical_percentile = (all_data <= avg_crisis_value).mean() * 100
+        # Binomial confidence interval for coverage
+        # Under null: exceptions ~ Binomial(n, 1 - confidence_level)
+        from scipy.stats import binom
+        coverage_ci_lower = binom.ppf(0.025, n_crisis, target_percentile/100) / n_crisis
+        coverage_ci_upper = binom.ppf(0.975, n_crisis, target_percentile/100) / n_crisis
+
+        coverage_acceptable = (coverage_ci_lower <= coverage <= coverage_ci_upper)
+
+        # ========================================================================
+        # APPROACH 2: Quantile-to-Quantile Comparison (with Bootstrap CI)
+        # ========================================================================
+        # Compare predicted percentile to ACTUAL percentile (not mean!)
+
+        if n_crisis >= 10:
+            # Empirical percentile with interpolation
+            actual_target_percentile = np.percentile(actual_crisis_values, target_percentile)
+
+            # Bootstrap confidence interval for the empirical percentile
+            n_bootstrap = 1000
+            np.random.seed(42)  # For reproducibility
+            bootstrap_percentiles = []
+
+            for _ in range(n_bootstrap):
+                boot_sample = np.random.choice(actual_crisis_values, size=n_crisis, replace=True)
+                bootstrap_percentiles.append(np.percentile(boot_sample, target_percentile))
+
+            actual_percentile_ci_lower = np.percentile(bootstrap_percentiles, 2.5)
+            actual_percentile_ci_upper = np.percentile(bootstrap_percentiles, 97.5)
+
+            # Point estimate comparison
+            percentile_error = predicted_var - actual_target_percentile
+            percentile_error_pct = 100 * percentile_error / actual_target_percentile if actual_target_percentile != 0 else np.nan
+
+            # Is prediction within confidence interval?
+            percentile_prediction_acceptable = (
+                actual_percentile_ci_lower <= predicted_var <= actual_percentile_ci_upper
+            )
         else:
-            empirical_percentile = (model['empirical_data'] <= avg_crisis_value).mean() * 100
+            # Too few observations for reliable percentile estimation
+            actual_target_percentile = np.nan
+            actual_percentile_ci_lower = np.nan
+            actual_percentile_ci_upper = np.nan
+            percentile_error = np.nan
+            percentile_error_pct = np.nan
+            percentile_prediction_acceptable = None
+
+        # ========================================================================
+        # APPROACH 3: Multiple Percentile Comparison
+        # ========================================================================
+        # Compare across multiple percentiles to assess overall fit
+
+        percentiles_to_test = [50, 60, 67, 75, 90, 95, target_percentile]
+        percentile_comparison = []
+
+        for p in percentiles_to_test:
+            if p <= 100:
+                predicted_p = self.evt_model.calculate_var(segment_name, p/100)
+
+                if n_crisis >= 5:
+                    actual_p = np.percentile(actual_crisis_values, p)
+                    error = predicted_p - actual_p
+                    error_pct = 100 * error / actual_p if actual_p != 0 else np.nan
+                else:
+                    actual_p = np.nan
+                    error = np.nan
+                    error_pct = np.nan
+
+                percentile_comparison.append({
+                    'percentile': p,
+                    'predicted': predicted_p,
+                    'actual': actual_p,
+                    'error': error,
+                    'error_pct': error_pct
+                })
+
+        percentile_comparison_df = pd.DataFrame(percentile_comparison)
+
+        # ========================================================================
+        # APPROACH 4: Severity Analysis (Expected Shortfall Validation)
+        # ========================================================================
+        # For observations that EXCEED VaR, how severe are they?
+
+        exceptions = actual_crisis_values[actual_crisis_values > predicted_var]
+
+        if len(exceptions) > 0:
+            avg_exception_severity = exceptions.mean()
+            max_exception_severity = exceptions.max()
+
+            # ES error (average of exceedances vs predicted ES)
+            es_error = avg_exception_severity - predicted_es if not np.isnan(predicted_es) else np.nan
+        else:
+            avg_exception_severity = 0
+            max_exception_severity = predicted_var
+            es_error = np.nan
+
+        # ========================================================================
+        # APPROACH 5: Distributional Measures (REFERENCE ONLY - NOT FOR VALIDATION)
+        # ========================================================================
+        # Include mean/median for context, but NOT as primary validation metric
+
+        crisis_mean = actual_crisis_values.mean()
+        crisis_median = np.median(actual_crisis_values)
+        crisis_std = actual_crisis_values.std()
+        crisis_max = actual_crisis_values.max()
+
+        # What percentile do these represent in the full distribution?
+        all_data = segment_data[self.value_col].dropna()
+        mean_percentile = (all_data <= crisis_mean).mean() * 100
+        median_percentile = (all_data <= crisis_median).mean() * 100
+        max_percentile = (all_data <= crisis_max).mean() * 100
+
+        # ========================================================================
+        # Traditional Metrics (for backward compatibility)
+        # ========================================================================
+        mae = mean_absolute_error(actual_crisis_values, [predicted_var] * n_crisis)
+        rmse = np.sqrt(mean_squared_error(actual_crisis_values, [predicted_var] * n_crisis))
+
+        # ========================================================================
+        # Compile Results
+        # ========================================================================
 
         results = {
+            # Basic info
             'segment': segment_name,
             'crisis_years': crisis_years,
-            'n_crisis_obs': len(actual_crisis_values),
-            'avg_crisis_value': avg_crisis_value,
-            'predicted_var': predicted_var,
+            'n_crisis_obs': n_crisis,
             'target_percentile': target_percentile,
+            'predicted_var': predicted_var,
+            'predicted_es': predicted_es,
+
+            # APPROACH 1: Coverage Testing (PRIMARY VALIDATION)
+            'coverage': coverage,
+            'coverage_ci_lower': coverage_ci_lower,
+            'coverage_ci_upper': coverage_ci_upper,
+            'coverage_acceptable': coverage_acceptable,
+            'exception_rate': exception_rate,
+            'n_exceptions': n_exceptions,
+            'expected_exceptions': expected_exceptions,
+
+            # APPROACH 2: Quantile-to-Quantile (PRIMARY VALIDATION)
+            'actual_target_percentile': actual_target_percentile,
+            'actual_percentile_ci_lower': actual_percentile_ci_lower,
+            'actual_percentile_ci_upper': actual_percentile_ci_upper,
+            'percentile_error': percentile_error,
+            'percentile_error_pct': percentile_error_pct,
+            'percentile_prediction_acceptable': percentile_prediction_acceptable,
+
+            # APPROACH 3: Multiple percentiles
+            'percentile_comparison': percentile_comparison_df,
+
+            # APPROACH 4: Severity
+            'avg_exception_severity': avg_exception_severity,
+            'max_exception_severity': max_exception_severity,
+            'es_error': es_error,
+
+            # APPROACH 5: Distributional (REFERENCE ONLY)
+            'crisis_mean': crisis_mean,
+            'crisis_median': crisis_median,
+            'crisis_std': crisis_std,
+            'crisis_max': crisis_max,
+            'mean_percentile': mean_percentile,
+            'median_percentile': median_percentile,
+            'max_percentile': max_percentile,
+
+            # Traditional metrics (backward compatibility)
             'mae': mae,
             'rmse': rmse,
-            'coverage': coverage,
-            'exception_rate': exception_rate,
-            'empirical_percentile': empirical_percentile,
-            'underprediction': max(0, avg_crisis_value - predicted_var),
-            'overprediction': max(0, predicted_var - avg_crisis_value)
+
+            # Deprecated fields (kept for backward compatibility)
+            'avg_crisis_value': crisis_mean,  # DEPRECATED: Use crisis_mean
+            'empirical_percentile': mean_percentile,  # DEPRECATED: Misleading name
+            'underprediction': max(0, crisis_mean - predicted_var),  # DEPRECATED: Wrong comparison
+            'overprediction': max(0, predicted_var - crisis_mean),  # DEPRECATED: Wrong comparison
         }
 
         return results
@@ -1113,6 +1269,126 @@ class EVTBacktester:
             'p_value': p_value,
             'reject_null': p_value < 0.05  # Reject if model is inadequate
         }
+
+    def print_backtest_summary(self, results):
+        """
+        Print a formatted summary of backtesting results.
+
+        Parameters:
+        -----------
+        results : dict
+            Results from backtest_crisis()
+        """
+        if results is None:
+            print("No backtesting results available.")
+            return
+
+        segment = results['segment']
+        years = results['crisis_years']
+        target = results['target_percentile']
+
+        print("\n" + "="*80)
+        print(f"BACKTESTING SUMMARY: {segment} ({years})")
+        print("="*80)
+
+        # PRIMARY METRICS
+        print("\n┌─ PRIMARY VALIDATION METRICS (VaR Backtesting) ─────────────────────────┐")
+        print("│")
+        print(f"│  Coverage Test (Does {target}th percentile VaR cover {target}% of observations?):")
+        print(f"│    • Target coverage:     {target:.0f}%")
+        print(f"│    • Actual coverage:     {results['coverage']*100:.1f}%")
+        print(f"│    • 95% CI:              [{results['coverage_ci_lower']*100:.1f}%, {results['coverage_ci_upper']*100:.1f}%]")
+
+        if results['coverage_acceptable']:
+            print(f"│    • Result:              ✓ PASS (within acceptable range)")
+        else:
+            print(f"│    • Result:              ✗ FAIL (outside acceptable range)")
+
+        print("│")
+
+        if not np.isnan(results['actual_target_percentile']):
+            print(f"│  Quantile-to-Quantile Comparison:")
+            print(f"│    • Predicted {target}th %ile: {results['predicted_var']:.6f}")
+            print(f"│    • Actual {target}th %ile:    {results['actual_target_percentile']:.6f}")
+            print(f"│    • Prediction error:    {results['percentile_error_pct']:+.1f}%")
+            print(f"│    • 95% CI:              [{results['actual_percentile_ci_lower']:.6f}, {results['actual_percentile_ci_upper']:.6f}]")
+
+            if results['percentile_prediction_acceptable']:
+                print(f"│    • Result:              ✓ PASS (within confidence interval)")
+            elif results['percentile_prediction_acceptable'] is False:
+                print(f"│    • Result:              ✗ FAIL (outside confidence interval)")
+            else:
+                print(f"│    • Result:              N/A (insufficient data)")
+        else:
+            print(f"│  Quantile-to-Quantile Comparison:")
+            print(f"│    • Result:              N/A (insufficient crisis observations)")
+
+        print("│")
+        print(f"│  Exception Analysis:")
+        print(f"│    • Expected exceptions:  {results['expected_exceptions']:.1f}")
+        print(f"│    • Actual exceptions:    {results['n_exceptions']}")
+        print(f"│    • Exception rate:       {results['exception_rate']:.2%}")
+
+        if results['n_exceptions'] > 0:
+            print(f"│    • Avg severity:         {results['avg_exception_severity']:.6f}")
+            print(f"│    • Max severity:         {results['max_exception_severity']:.6f}")
+
+            if not np.isnan(results['es_error']):
+                print(f"│    • ES prediction error:  {results['es_error']:+.6f}")
+
+        print("│")
+        print("└────────────────────────────────────────────────────────────────────────┘")
+
+        # REFERENCE STATISTICS
+        print("\n┌─ REFERENCE STATISTICS (For Context Only) ──────────────────────────────┐")
+        print("│")
+        print(f"│  Crisis Period: {years}")
+        print(f"│  Number of observations: {results['n_crisis_obs']}")
+        print("│")
+        print(f"│  Crisis Distributional Measures:")
+        print(f"│    • Mean:     {results['crisis_mean']:.6f}  (≈ {results['mean_percentile']:.0f}th percentile)")
+        print(f"│    • Median:   {results['crisis_median']:.6f}  (≈ {results['median_percentile']:.0f}th percentile)")
+        print(f"│    • Std Dev:  {results['crisis_std']:.6f}")
+        print(f"│    • Max:      {results['crisis_max']:.6f}  (≈ {results['max_percentile']:.0f}th percentile)")
+        print("│")
+        print("│  ⚠ NOTE: Mean and median are shown for context only.")
+        print("│          VaR validation should focus on coverage and quantile tests.")
+        print("│")
+        print("└────────────────────────────────────────────────────────────────────────┘")
+
+        # OVERALL ASSESSMENT
+        print("\n┌─ OVERALL MODEL ASSESSMENT ─────────────────────────────────────────────┐")
+        print("│")
+
+        passes = 0
+        total_tests = 0
+
+        if results['coverage_acceptable']:
+            passes += 1
+        total_tests += 1
+
+        if results['percentile_prediction_acceptable'] is not None:
+            total_tests += 1
+            if results['percentile_prediction_acceptable']:
+                passes += 1
+
+        pass_rate = passes / total_tests if total_tests > 0 else 0
+
+        if pass_rate == 1.0:
+            assessment = "✓ EXCELLENT - Model passes all validation tests"
+            color = "green"
+        elif pass_rate >= 0.5:
+            assessment = "~ ACCEPTABLE - Model passes most validation tests"
+            color = "yellow"
+        else:
+            assessment = "✗ POOR - Model fails primary validation tests"
+            color = "red"
+
+        print(f"│  {assessment}")
+        print(f"│  Tests passed: {passes}/{total_tests}")
+        print("│")
+        print("└────────────────────────────────────────────────────────────────────────┘")
+        print("="*80 + "\n")
 
 
 # ==================================================================================
@@ -1498,7 +1774,7 @@ def plot_evt_diagnostics(evt_model, segment_name, data, value_col='delta_opex/re
 
 def plot_backtesting_results(backtester, segment_name, percentiles=[50, 60, 67, 75, 90, 97.5]):
     """
-    Plot backtesting results including coverage and crisis comparison.
+    Plot improved backtesting results with proper VaR validation metrics.
 
     Parameters:
     -----------
@@ -1513,125 +1789,277 @@ def plot_backtesting_results(backtester, segment_name, percentiles=[50, 60, 67, 
     --------
     matplotlib.figure.Figure
     """
-    fig, axes = plt.subplots(2, 2, figsize=(14, 10))
-    fig.suptitle(f'Backtesting Results: {segment_name}', fontsize=16, fontweight='bold')
+    # Get crisis backtesting results
+    crisis_2008 = backtester.backtest_crisis(segment_name, [2008], target_percentile=96)
+    crisis_2009 = backtester.backtest_crisis(segment_name, [2009], target_percentile=96)
 
-    # 1. Coverage by percentile
+    if not crisis_2008 or not crisis_2009:
+        # Create simple figure if no crisis data
+        fig, ax = plt.subplots(1, 1, figsize=(10, 6))
+        ax.text(0.5, 0.5, 'No crisis data available for backtesting',
+               ha='center', va='center', fontsize=14)
+        ax.set_title(f'Backtesting Results: {segment_name}', fontsize=16, fontweight='bold')
+        ax.axis('off')
+        return fig
+
+    # Create comprehensive backtesting visualization
+    fig = plt.figure(figsize=(18, 14))
+    gs = fig.add_gridspec(4, 3, hspace=0.35, wspace=0.3)
+
+    target = 96  # Target percentile
+
+    # ========================================================================
+    # ROW 1: Coverage Tests for 2008 and 2009
+    # ========================================================================
+
+    # 1a. 2008 Coverage Test
+    ax1a = fig.add_subplot(gs[0, 0])
+
+    coverage_2008 = crisis_2008['coverage'] * 100
+    ci_lower_2008 = crisis_2008['coverage_ci_lower'] * 100
+    ci_upper_2008 = crisis_2008['coverage_ci_upper'] * 100
+
+    bars_2008 = ax1a.barh(['Actual'], [coverage_2008], color='steelblue', alpha=0.7, height=0.3)
+    ax1a.barh(['Target'], [target], color='lightcoral', alpha=0.7, height=0.3)
+    ax1a.plot([ci_lower_2008, ci_upper_2008], [0, 0], 'k-', linewidth=3)
+    ax1a.plot([ci_lower_2008, ci_lower_2008], [-0.1, 0.1], 'k-', linewidth=2)
+    ax1a.plot([ci_upper_2008, ci_upper_2008], [-0.1, 0.1], 'k-', linewidth=2)
+
+    ax1a.set_xlabel('Coverage (%)', fontsize=10)
+    ax1a.set_xlim([target - 15, min(100, target + 15)])
+
+    verdict_2008 = "✓ PASS" if crisis_2008['coverage_acceptable'] else "✗ FAIL"
+    color_2008 = 'green' if crisis_2008['coverage_acceptable'] else 'red'
+    ax1a.set_title(f'2008 Coverage Test: {verdict_2008}',
+                   fontsize=11, fontweight='bold', color=color_2008)
+    ax1a.grid(axis='x', alpha=0.3)
+
+    # 1b. 2009 Coverage Test
+    ax1b = fig.add_subplot(gs[0, 1])
+
+    coverage_2009 = crisis_2009['coverage'] * 100
+    ci_lower_2009 = crisis_2009['coverage_ci_lower'] * 100
+    ci_upper_2009 = crisis_2009['coverage_ci_upper'] * 100
+
+    ax1b.barh(['Actual'], [coverage_2009], color='steelblue', alpha=0.7, height=0.3)
+    ax1b.barh(['Target'], [target], color='lightcoral', alpha=0.7, height=0.3)
+    ax1b.plot([ci_lower_2009, ci_upper_2009], [0, 0], 'k-', linewidth=3)
+    ax1b.plot([ci_lower_2009, ci_lower_2009], [-0.1, 0.1], 'k-', linewidth=2)
+    ax1b.plot([ci_upper_2009, ci_upper_2009], [-0.1, 0.1], 'k-', linewidth=2)
+
+    ax1b.set_xlabel('Coverage (%)', fontsize=10)
+    ax1b.set_xlim([target - 15, min(100, target + 15)])
+
+    verdict_2009 = "✓ PASS" if crisis_2009['coverage_acceptable'] else "✗ FAIL"
+    color_2009 = 'green' if crisis_2009['coverage_acceptable'] else 'red'
+    ax1b.set_title(f'2009 Coverage Test: {verdict_2009}',
+                   fontsize=11, fontweight='bold', color=color_2009)
+    ax1b.grid(axis='x', alpha=0.3)
+
+    # 1c. Exception Analysis
+    ax1c = fig.add_subplot(gs[0, 2])
+
+    exception_data = [
+        crisis_2008['expected_exceptions'],
+        crisis_2008['n_exceptions'],
+        crisis_2009['expected_exceptions'],
+        crisis_2009['n_exceptions']
+    ]
+    exception_labels = ['2008\nExpected', '2008\nActual', '2009\nExpected', '2009\nActual']
+    exception_colors = ['lightgreen', 'coral', 'lightgreen', 'coral']
+
+    ax1c.bar(range(4), exception_data, color=exception_colors, alpha=0.7)
+    ax1c.set_xticks(range(4))
+    ax1c.set_xticklabels(exception_labels, fontsize=9)
+    ax1c.set_ylabel('Count', fontsize=10)
+    ax1c.set_title('Exception Counts', fontsize=11, fontweight='bold')
+    ax1c.grid(axis='y', alpha=0.3)
+
+    # ========================================================================
+    # ROW 2: Quantile-to-Quantile Comparisons
+    # ========================================================================
+
+    # 2a. 2008 Quantile Comparison
+    ax2a = fig.add_subplot(gs[1, 0])
+
+    if not np.isnan(crisis_2008['actual_target_percentile']):
+        predicted_2008 = crisis_2008['predicted_var']
+        actual_2008 = crisis_2008['actual_target_percentile']
+        ci_lower_q_2008 = crisis_2008['actual_percentile_ci_lower']
+        ci_upper_q_2008 = crisis_2008['actual_percentile_ci_upper']
+
+        ax2a.scatter([1], [predicted_2008], s=300, color='red', marker='*',
+                    label=f'Predicted {target}th', zorder=3)
+        ax2a.scatter([1], [actual_2008], s=200, color='blue', marker='o',
+                    label=f'Actual {target}th', zorder=3)
+
+        ax2a.errorbar([1], [actual_2008],
+                     yerr=[[actual_2008 - ci_lower_q_2008], [ci_upper_q_2008 - actual_2008]],
+                     fmt='none', color='blue', linewidth=2, capsize=10)
+
+        ax2a.set_xlim([0.5, 1.5])
+        ax2a.set_xticks([])
+        ax2a.set_ylabel(f'{target}th Percentile Value', fontsize=10)
+        ax2a.set_title(f'2008 Quantile Comparison\nError: {crisis_2008["percentile_error_pct"]:.1f}%',
+                      fontsize=11, fontweight='bold')
+        ax2a.legend(fontsize=9)
+        ax2a.grid(axis='y', alpha=0.3)
+        ax2a.plot([0.5, 1.5], [predicted_2008, predicted_2008], 'r--', alpha=0.3)
+    else:
+        ax2a.text(0.5, 0.5, 'Insufficient\nobservations', ha='center', va='center', fontsize=10)
+        ax2a.set_title('2008 Quantile Comparison', fontsize=11, fontweight='bold')
+
+    # 2b. 2009 Quantile Comparison
+    ax2b = fig.add_subplot(gs[1, 1])
+
+    if not np.isnan(crisis_2009['actual_target_percentile']):
+        predicted_2009 = crisis_2009['predicted_var']
+        actual_2009 = crisis_2009['actual_target_percentile']
+        ci_lower_q_2009 = crisis_2009['actual_percentile_ci_lower']
+        ci_upper_q_2009 = crisis_2009['actual_percentile_ci_upper']
+
+        ax2b.scatter([1], [predicted_2009], s=300, color='red', marker='*',
+                    label=f'Predicted {target}th', zorder=3)
+        ax2b.scatter([1], [actual_2009], s=200, color='blue', marker='o',
+                    label=f'Actual {target}th', zorder=3)
+
+        ax2b.errorbar([1], [actual_2009],
+                     yerr=[[actual_2009 - ci_lower_q_2009], [ci_upper_q_2009 - actual_2009]],
+                     fmt='none', color='blue', linewidth=2, capsize=10)
+
+        ax2b.set_xlim([0.5, 1.5])
+        ax2b.set_xticks([])
+        ax2b.set_ylabel(f'{target}th Percentile Value', fontsize=10)
+        ax2b.set_title(f'2009 Quantile Comparison\nError: {crisis_2009["percentile_error_pct"]:.1f}%',
+                      fontsize=11, fontweight='bold')
+        ax2b.legend(fontsize=9)
+        ax2b.grid(axis='y', alpha=0.3)
+        ax2b.plot([0.5, 1.5], [predicted_2009, predicted_2009], 'r--', alpha=0.3)
+    else:
+        ax2b.text(0.5, 0.5, 'Insufficient\nobservations', ha='center', va='center', fontsize=10)
+        ax2b.set_title('2009 Quantile Comparison', fontsize=11, fontweight='bold')
+
+    # 2c. Multi-Percentile Comparison
+    ax2c = fig.add_subplot(gs[1, 2])
+
+    pcomp_2008 = crisis_2008['percentile_comparison']
+    pcomp_2009 = crisis_2009['percentile_comparison']
+
+    if not pcomp_2008.empty and not pcomp_2008['actual'].isna().all():
+        ax2c.plot(pcomp_2008['percentile'], pcomp_2008['predicted'], 'r-o',
+                 linewidth=2, markersize=6, label='Predicted')
+        ax2c.plot(pcomp_2008['percentile'], pcomp_2008['actual'], 'b-s',
+                 linewidth=2, markersize=6, alpha=0.7, label='2008 Actual')
+
+    if not pcomp_2009.empty and not pcomp_2009['actual'].isna().all():
+        ax2c.plot(pcomp_2009['percentile'], pcomp_2009['actual'], 'g-^',
+                 linewidth=2, markersize=6, alpha=0.7, label='2009 Actual')
+
+    ax2c.axvline(target, color='gray', linestyle='--', alpha=0.5)
+    ax2c.set_xlabel('Percentile', fontsize=10)
+    ax2c.set_ylabel('Value', fontsize=10)
+    ax2c.set_title('Multi-Percentile Comparison', fontsize=11, fontweight='bold')
+    ax2c.legend(fontsize=8)
+    ax2c.grid(alpha=0.3)
+
+    # ========================================================================
+    # ROW 3: Coverage by Percentile (Across All Data)
+    # ========================================================================
+
+    # 3a,b. Coverage across percentiles
     coverage_results = backtester.calculate_coverage_by_percentile(segment_name, percentiles)
 
-    percentile_labels = [f'{p}th' for p in percentiles]
+    ax3 = fig.add_subplot(gs[2, :2])
+
+    percentile_labels = [f'{p:.1f}' for p in percentiles]
     coverage_values = [coverage_results['coverage'][p] for p in percentiles]
     expected_coverage = [p/100 for p in percentiles]
 
     x = np.arange(len(percentiles))
     width = 0.35
 
-    axes[0, 0].bar(x - width/2, coverage_values, width, label='Actual Coverage',
-                  alpha=0.7, color='steelblue')
-    axes[0, 0].bar(x + width/2, expected_coverage, width, label='Expected Coverage',
-                  alpha=0.7, color='lightcoral')
-    axes[0, 0].set_xlabel('Percentile')
-    axes[0, 0].set_ylabel('Coverage')
-    axes[0, 0].set_title('Actual vs Expected Coverage')
-    axes[0, 0].set_xticks(x)
-    axes[0, 0].set_xticklabels(percentile_labels, rotation=45)
-    axes[0, 0].legend()
-    axes[0, 0].grid(axis='y', alpha=0.3)
-    axes[0, 0].axhline(y=1.0, color='green', linestyle='--', linewidth=1, alpha=0.5)
+    ax3.bar(x - width/2, coverage_values, width, label='Actual Coverage',
+           alpha=0.7, color='steelblue')
+    ax3.bar(x + width/2, expected_coverage, width, label='Expected Coverage',
+           alpha=0.7, color='lightcoral')
+    ax3.set_xlabel('Percentile', fontsize=10)
+    ax3.set_ylabel('Coverage', fontsize=10)
+    ax3.set_title('Coverage Across Percentiles (All Data)', fontsize=11, fontweight='bold')
+    ax3.set_xticks(x)
+    ax3.set_xticklabels(percentile_labels)
+    ax3.legend()
+    ax3.grid(axis='y', alpha=0.3)
+    ax3.axhline(y=1.0, color='green', linestyle='--', linewidth=1, alpha=0.5)
 
-    # 2. Exception Rate by percentile
+    # 3c. Exception rates
+    ax3c = fig.add_subplot(gs[2, 2])
+
     exception_values = [coverage_results['exception_rate'][p] for p in percentiles]
     expected_exception = [1 - p/100 for p in percentiles]
 
-    axes[0, 1].bar(x - width/2, exception_values, width, label='Actual Exception Rate',
-                  alpha=0.7, color='coral')
-    axes[0, 1].bar(x + width/2, expected_exception, width, label='Expected Exception Rate',
-                  alpha=0.7, color='lightgreen')
-    axes[0, 1].set_xlabel('Percentile')
-    axes[0, 1].set_ylabel('Exception Rate')
-    axes[0, 1].set_title('Actual vs Expected Exception Rate')
-    axes[0, 1].set_xticks(x)
-    axes[0, 1].set_xticklabels(percentile_labels, rotation=45)
-    axes[0, 1].legend()
-    axes[0, 1].grid(axis='y', alpha=0.3)
+    ax3c.bar(x - width/2, exception_values, width, label='Actual',
+            alpha=0.7, color='coral')
+    ax3c.bar(x + width/2, expected_exception, width, label='Expected',
+            alpha=0.7, color='lightgreen')
+    ax3c.set_xlabel('Percentile', fontsize=10)
+    ax3c.set_ylabel('Exception Rate', fontsize=10)
+    ax3c.set_title('Exception Rates', fontsize=11, fontweight='bold')
+    ax3c.set_xticks(x)
+    ax3c.set_xticklabels(percentile_labels, fontsize=8)
+    ax3c.legend(fontsize=8)
+    ax3c.grid(axis='y', alpha=0.3)
 
-    # 3. Crisis period analysis (2008-2009)
-    crisis_2008 = backtester.backtest_crisis(segment_name, [2008], target_percentile=96)
-    crisis_2009 = backtester.backtest_crisis(segment_name, [2009], target_percentile=96)
+    # ========================================================================
+    # ROW 4: Summary Statistics
+    # ========================================================================
 
-    if crisis_2008 and crisis_2009:
-        crisis_labels = ['2008', '2009']
-        actual_values = [crisis_2008['avg_crisis_value'], crisis_2009['avg_crisis_value']]
-        predicted_values = [crisis_2008['predicted_var'], crisis_2009['predicted_var']]
+    ax4 = fig.add_subplot(gs[3, :])
+    ax4.axis('off')
 
-        x_crisis = np.arange(len(crisis_labels))
+    summary_text = f"""
+    ══════════════════════════════════════════════════════════════════════════════════════════════════════════════
+                                        BACKTESTING SUMMARY: {segment_name}
+    ══════════════════════════════════════════════════════════════════════════════════════════════════════════════
 
-        axes[1, 0].bar(x_crisis - width/2, actual_values, width,
-                      label='Actual Crisis Value', alpha=0.7, color='darkred')
-        axes[1, 0].bar(x_crisis + width/2, predicted_values, width,
-                      label='Predicted VaR (96th %ile)', alpha=0.7, color='navy')
-        axes[1, 0].set_xlabel('Crisis Year')
-        axes[1, 0].set_ylabel('Delta Opex/Revenue')
-        axes[1, 0].set_title('Crisis Period: Actual vs Predicted')
-        axes[1, 0].set_xticks(x_crisis)
-        axes[1, 0].set_xticklabels(crisis_labels)
-        axes[1, 0].legend()
-        axes[1, 0].grid(axis='y', alpha=0.3)
+    PRIMARY VALIDATION METRICS (VaR at {target}th Percentile):
+    ──────────────────────────────────────────────────────────────────────────────────────────────────────────────
+                                    2008 Crisis                                          2009 Crisis
+    ──────────────────────────────────────────────────────────────────────────────────────────────────────────────
+    Coverage Test:
+      • Target Coverage:          {target:.0f}%                                           {target:.0f}%
+      • Actual Coverage:          {crisis_2008['coverage']*100:.1f}%                                          {crisis_2009['coverage']*100:.1f}%
+      • 95% CI:                   [{crisis_2008['coverage_ci_lower']*100:.1f}%, {crisis_2008['coverage_ci_upper']*100:.1f}%]                           [{crisis_2009['coverage_ci_lower']*100:.1f}%, {crisis_2009['coverage_ci_upper']*100:.1f}%]
+      • Result:                   {'PASS ✓' if crisis_2008['coverage_acceptable'] else 'FAIL ✗':15}                                   {'PASS ✓' if crisis_2009['coverage_acceptable'] else 'FAIL ✗':15}
 
-        # 4. Performance Metrics Summary
-        axes[1, 1].axis('off')
+    Quantile-to-Quantile:
+      • Predicted {target}th:         {crisis_2008['predicted_var']:.6f}                                {crisis_2009['predicted_var']:.6f}
+      • Actual {target}th:            {crisis_2008['actual_target_percentile']:.6f}                                {crisis_2009['actual_target_percentile']:.6f}
+      • Error:                    {crisis_2008['percentile_error_pct']:+.1f}%                                         {crisis_2009['percentile_error_pct']:+.1f}%
+      • In 95% CI:                {'Yes ✓' if crisis_2008.get('percentile_prediction_acceptable') else 'No ✗' if crisis_2008.get('percentile_prediction_acceptable') is not None else 'N/A':15}                                   {'Yes ✓' if crisis_2009.get('percentile_prediction_acceptable') else 'No ✗' if crisis_2009.get('percentile_prediction_acceptable') is not None else 'N/A':15}
 
-        metrics_text = f"""
-        Performance Metrics Summary
-        ═══════════════════════════════════
+    Exception Analysis:
+      • Expected exceptions:      {crisis_2008['expected_exceptions']:.1f}                                          {crisis_2009['expected_exceptions']:.1f}
+      • Actual exceptions:        {crisis_2008['n_exceptions']}                                               {crisis_2009['n_exceptions']}
+      • Avg severity:             {crisis_2008['avg_exception_severity']:.6f}                                {crisis_2009['avg_exception_severity']:.6f}
 
-        2008 Crisis:
-        ────────────────────────────────
-          • Actual avg value: {crisis_2008['avg_crisis_value']:.4f}
-          • Predicted VaR (96th): {crisis_2008['predicted_var']:.4f}
-          • MAE: {crisis_2008['mae']:.4f}
-          • RMSE: {crisis_2008['rmse']:.4f}
-          • Coverage: {crisis_2008['coverage']:.2%}
-          • Exception rate: {crisis_2008['exception_rate']:.2%}
-          • Empirical %ile: {crisis_2008['empirical_percentile']:.1f}th
+    REFERENCE STATISTICS (For Context Only):
+    ──────────────────────────────────────────────────────────────────────────────────────────────────────────────
+      • Crisis observations:      {crisis_2008['n_crisis_obs']}                                               {crisis_2009['n_crisis_obs']}
+      • Mean (≈ percentile):      {crisis_2008['crisis_mean']:.6f} ({crisis_2008['mean_percentile']:.0f}th)                     {crisis_2009['crisis_mean']:.6f} ({crisis_2009['mean_percentile']:.0f}th)
+      • Median (≈ percentile):    {crisis_2008['crisis_median']:.6f} ({crisis_2008['median_percentile']:.0f}th)                     {crisis_2009['crisis_median']:.6f} ({crisis_2009['median_percentile']:.0f}th)
+      • Max (≈ percentile):       {crisis_2008['crisis_max']:.6f} ({crisis_2008['max_percentile']:.0f}th)                     {crisis_2009['crisis_max']:.6f} ({crisis_2009['max_percentile']:.0f}th)
 
-        2009 Crisis:
-        ────────────────────────────────
-          • Actual avg value: {crisis_2009['avg_crisis_value']:.4f}
-          • Predicted VaR (96th): {crisis_2009['predicted_var']:.4f}
-          • MAE: {crisis_2009['mae']:.4f}
-          • RMSE: {crisis_2009['rmse']:.4f}
-          • Coverage: {crisis_2009['coverage']:.2%}
-          • Exception rate: {crisis_2009['exception_rate']:.2%}
-          • Empirical %ile: {crisis_2009['empirical_percentile']:.1f}th
+    ══════════════════════════════════════════════════════════════════════════════════════════════════════════════
+    NOTE: Mean and median are shown for reference. Primary validation should focus on coverage and quantile tests.
+    ══════════════════════════════════════════════════════════════════════════════════════════════════════════════
+    """
 
-        Model Assessment:
-        ────────────────────────────────
-        """
+    ax4.text(0.05, 0.95, summary_text, transform=ax4.transAxes,
+            fontsize=8, verticalalignment='top', fontfamily='monospace',
+            bbox=dict(boxstyle='round', facecolor='lightyellow', alpha=0.8))
 
-        # Assess model performance
-        avg_coverage_error = np.mean([
-            abs(crisis_2008['coverage'] - 0.96),
-            abs(crisis_2009['coverage'] - 0.96)
-        ])
-
-        if avg_coverage_error < 0.1:
-            metrics_text += "  ✓ Good coverage accuracy"
-        elif avg_coverage_error < 0.2:
-            metrics_text += "  ~ Moderate coverage accuracy"
-        else:
-            metrics_text += "  ✗ Poor coverage accuracy"
-
-        axes[1, 1].text(0.05, 0.95, metrics_text, transform=axes[1, 1].transAxes,
-                       fontsize=9, verticalalignment='top', fontfamily='monospace',
-                       bbox=dict(boxstyle='round', facecolor='lightblue', alpha=0.3))
-    else:
-        axes[1, 0].text(0.5, 0.5, 'No crisis data available',
-                       ha='center', va='center', fontsize=12)
-        axes[1, 1].text(0.5, 0.5, 'No crisis data available',
-                       ha='center', va='center', fontsize=12)
-
-    plt.tight_layout()
+    plt.suptitle(f'Improved VaR Backtesting Results: {segment_name}',
+                fontsize=14, fontweight='bold', y=0.995)
 
     return fig
 
