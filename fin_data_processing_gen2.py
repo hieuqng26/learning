@@ -166,9 +166,9 @@ class data_processing:
                     "NON_CUR_LIABILITIES_BONDS",
                     "NON_CUR_LIABILITIES_CNV_DEBT",
                     "NON_CUR_LIABILITIES_SBORD_DE",
-                    "NON_CUR_LIABS_RDNB_PRF_SHR_CP",
+                    "NON_CUR_LIABS_RDMB_PRF_SHR_CP",
                     "NON_CUR_LIABILITIES_FIN_LSE",
-                    "NON_CUR_LIABILITIES_BANK_S",
+                    "NON_CUR_LIABILITIES_BANK_5",
                 ]
             ],
             "ShortTermDebt": [
@@ -469,8 +469,7 @@ class data_processing:
             globals()[f"final_missing_{target}"]["Year_Diff"] = globals()[
                 f"final_missing_{target}"
             ]["Year"].diff()
-            globals()[f"final_{target}"]["Valid_{target}"] = False
-            # globals()[f"final_{target}"] = final[final[target] != "Missing"]
+            # globals()[f"final_mising_{target}"]["Valid_{target}"] = False
             globals()[f"final_{target}"] = final[final[target] != "Missing"]
             globals()[f"final_{target}"][target] = pd.to_numeric(
                 globals()[f"final_{target}"][target], errors="coerce"
@@ -673,7 +672,7 @@ class data_processing:
             ), "Length changed after concating!"
             if len(final_merged) == 0:
                 final_merged = globals()[f"final_{target}"][
-                    columns_needed + [target, target2]
+                    columns_needed + [target, "CAPEX", target2]
                 ]
             else:
                 final_merged_processing = final_merged.copy()
@@ -845,11 +844,11 @@ for i in ["Mar-31", "Jun-30", "Sep-30", "Dec-31"]:
     ]:
         if j != "Additional Step: Unique IDs across the full dataset":
             datapoint_smry.loc[j, i] = "/"
-            id_smry.loc[j, i] = "/"
+        id_smry.loc[j, i] = "/"
 
 id_smry = id_smry.iloc[1:, :]
 id_smry = pd.concat(
-    [id_smry.iloc[:4], id_smry.iloc[4:]]
+    [id_smry.iloc[:4], id_smry.iloc[-1:], id_smry.iloc[4:-1]]
 ).reset_index()
 
 
@@ -870,10 +869,10 @@ print("Final Combined Datapoints:", final.shape[0])
 final.isic_code = final.isic_code.apply(lambda x: str(x).replace(".0", ""))
 final["isic_code"] = pd.to_numeric(final["isic_code"], errors="coerce").astype("Int64")
 os.makedirs(os.path.dirname(OUTPUT_PATH), exist_ok=True)
-os.makedirs(os.path.dirname(OUTPUT_PATH2), exist_ok=True)
+# os.makedirs(os.path.dirname(OUTPUT_PATH2), exist_ok=True)
 # final.reset_index(drop=True).to_csv(OUTPUT_PATH)
 with pd.ExcelWriter(OUTPUT_PATH, engine="openpyxl") as writer:
-    datapoint_smry.to_excel(writer, sheet_name="Summary_DataPoints", index=False)
+    datapoint_smry.to_excel(writer, sheet_name="Summary_DataPoints")
     id_smry.to_excel(writer, sheet_name="Summary_IDs", index=False)
     final.to_excel(writer, sheet_name="processed_findata", index=False)
 # final.reset_index(drop=True).to_csv(OUTPUT_PATH2)
@@ -997,7 +996,6 @@ smry3 = quarter_summary(final.copy(), "standardized_date_of_financials", key_col
 DataStats = pd.DataFrame()
 SpreadIdStats = pd.DataFrame()
 countrylevel = pd.DataFrame()
-target = "spread_id"
 final = final[(final[target] != "Missing") & (final[target] != "Not applicable")]
 target = "spread_id"
 print(f"No. of samples with valid {target}:", len(final))
@@ -1048,7 +1046,7 @@ for c in final["country_of_risk"].unique():
 
 with pd.ExcelWriter(OUTPUT_PATH, mode="a", engine="openpyxl") as writer:
     DataStats.sort_values(
-        ["Sector_total", "Sector", "spread_id"],
+        by=["Sector_total", "Sector", "spread_id"],
         ascending=[False, True, False],
     ).rename(
         columns={"spread_id": "DataPoints count (based on spread_id column)"}
