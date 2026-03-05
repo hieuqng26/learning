@@ -1,0 +1,357 @@
+def analyze_dampening_overlap(Opex_data, exclude_set,
+  percentile_dict, id_column_name):
+      """
+      Analyze overlap between exclusion dampening and
+  percentile winsorization.
+      """
+      results = []
+
+      for segment in Opex_data["TOPS"].unique():
+          segment_data = Opex_data[Opex_data["TOPS"] ==
+  segment].copy()
+          quantile_value = percentile_dict[segment]
+
+          # Create masks
+          in_exclude_set =
+  segment_data[["DATE_OF_FINANCIALS", id_column_name]].apply(
+              tuple, axis=1
+          ).isin(exclude_set)
+
+          above_quantile = segment_data["delta_opex/rev"] >
+  quantile_value
+   
+          # Categories
+          only_excluded = in_exclude_set & ~above_quantile  
+          only_winsorized = ~in_exclude_set & above_quantile
+          both = in_exclude_set & above_quantile
+          neither = ~in_exclude_set & ~above_quantile        
+
+          results.append({
+              'segment': segment,
+              'n_total': len(segment_data),
+              'n_only_excluded': only_excluded.sum(),        
+              'n_only_winsorized': only_winsorized.sum(),    
+              'n_OVERLAP': both.sum(),  # KEY: These get    
+  different treatment
+              'n_neither': neither.sum(),
+              'pct_overlap': 100 * both.sum() /
+  len(segment_data),
+              'quantile_threshold': quantile_value,
+              'mean_overlap_value': segment_data.loc[both,  
+  "delta_opex/rev"].mean() if both.any() else np.nan,        
+              'median_overlap_value': segment_data.loc[both,
+  "delta_opex/rev"].median() if both.any() else np.nan,      
+          })
+
+      return pd.DataFrame(results)
+
+  # Run the analysis BEFORE applying dampening
+  overlap_df = analyze_dampening_overlap(
+      Opex_clean_rel.copy(),
+      exclude_set,
+      percentile_dict,
+      id_column_name
+  )
+  print(overlap_df)
+
+  2. Side-by-Side Comparison
+
+  Run both scenarios and compare:
+
+  def compare_scenarios(Opex_data, exclude_set,
+  percentile_dict, dampner_val, id_column_name):
+      """
+      Compare results with/without exclude_set in
+  winsorization mask.
+      """
+      # Scenario A: Exclude from winsorization (current code
+  - line 2011-2012)
+      data_A = Opex_data.copy()
+
+      # Scenario B: Include in winsorization (remove the    
+  exclude_set check)
+      data_B = Opex_data.copy()
+
+      comparison_results = []
+
+      for segment in data_A["TOPS"].unique():
+          segment_mask = data_A["TOPS"] == segment
+          quantile_value = percentile_dict[segment]
+
+          # Scenario A masks (current - excludes exclude_set)
+          winsorized_mask_A = (
+              segment_mask
+              & (data_A["delta_opex/rev"] > quantile_value)  
+              & (~data_A[["DATE_OF_FINANCIALS",
+  id_column_name]].apply(tuple, axis=1).isin(exclude_set))  
+          )
+
+          # Scenario B masks (alternative - includes
+  exclude_set)
+          winsorized_mask_B = (
+              segment_mask
+              & (data_B["delta_opex/rev"] > quantile_value)  
+              # Note: NO exclude_set check here
+          )
+
+          # Apply winsorization
+          data_A.loc[winsorized_mask_A, "delta_opex/rev"] =  
+  quantile_value
+          data_B.loc[winsorized_mask_B, "delta_opex/rev"] =  
+  quantile_value
+
+          # Compare distributions
+          comparison_results.append({
+              'segment': segment,
+              'mean_A': data_A.loc[segment_mask,
+  "delta_opex/rev"].mean(),
+              'mean_B': data_B.loc[segment_mask,
+  "delta_opex/rev"].mean(),
+              'mean_diff': data_B.loc[segment_mask,
+  "delta_opex/rev"].mean() -
+                          data_A.loc[segment_mask,
+  "delta_opex/rev"].mean(),
+              'median_A': data_A.loc[segment_mask,
+  "delta_opex/rev"].median(),
+              'median_B': data_B.loc[segment_mask,
+  "delta_opex/rev"].median(),
+              'std_A': data_A.loc[segment_mask,
+  "delta_opex/rev"].std(),
+              'std_B': data_B.loc[segment_mask,
+  "delta_opex/rev"].std(),
+              'max_A': data_A.loc[segment_mask,
+  "delta_opex/rev"].max(),
+              'max_B': data_B.loc[segment_mask,
+  "delta_opex/rev"].max(),
+              'p95_A': data_A.loc[segment_mask,
+  "delta_opex/rev"].quantile(0.95),
+              'p95_B': data_B.loc[segment_mask,
+  "delta_opex/rev"].quantile(0.95),
+              'p99_A': data_A.loc[segment_mask,
+  "delta_opex/rev"].quantile(0.99),
+              'p99_B': data_B.loc[segment_mask,
+  "delta_opex/rev"].quantile(0.99),
+          })
+
+      return pd.DataFrame(comparison_results), data_A, data_B
+
+  3. EVT Parameter Impact Analysis
+
+  Compare how GPD parameters change:
+
+  def compare_evt_parameters(data_A, data_B, segments,      
+  threshold_percentile=0.95):
+      """
+      Compare EVT parameters between scenarios.
+      """
+      from scipy.stats import genpareto
+
+      results = []
+
+      for segment in segments:
+          for scenario, data, label in [(data_A,
+  'A_exclude'), (data_B, 'B_include')]:
+              segment_data = data[data["TOPS"] ==
+  segment]["delta_opex/rev"].dropna()
+
+              threshold =
+  segment_data.quantile(threshold_percentile)
+              exceedances = segment_data[segment_data >      
+  threshold] - threshold
+
+              if len(exceedances) >= 30:
+                  try:
+                      xi, loc, sigma =
+  genpareto.fit(exceedances, floc=0)
+
+                      results.append({
+                          'segment': segment,
+                          'scenario': label,
+                          'threshold': threshold,
+                          'n_exceedances': len(exceedances),
+                          'xi_shape': xi,
+                          'sigma_scale': sigma,
+                          'mean_excess': exceedances.mean(),
+                      })
+                  except:
+                      pass
+
+      df = pd.DataFrame(results)
+
+      # Pivot for easier comparison
+      pivot = df.pivot_table(
+          index='segment',
+          columns='scenario',
+          values=['xi_shape', 'sigma_scale', 'n_exceedances',
+   'threshold']
+      )
+
+      return df, pivot
+
+  4. Visual Comparison Plots
+
+  def plot_scenario_comparison(data_A, data_B, segment,      
+  exclude_set, percentile_dict):
+      """
+      Visualize the differences between scenarios for a      
+  specific segment.
+      """
+      fig, axes = plt.subplots(2, 2, figsize=(14, 10))      
+      fig.suptitle(f'Scenario Comparison: {segment}',        
+  fontsize=14, fontweight='bold')
+
+      segment_data_A = data_A[data_A["TOPS"] ==
+  segment]["delta_opex/rev"].dropna()
+      segment_data_B = data_B[data_B["TOPS"] ==
+  segment]["delta_opex/rev"].dropna()
+
+      # 1. Histograms overlay
+      axes[0, 0].hist(segment_data_A, bins=50, alpha=0.5,    
+  label='Scenario A (exclude)', color='blue')
+      axes[0, 0].hist(segment_data_B, bins=50, alpha=0.5,    
+  label='Scenario B (include)', color='red')
+      axes[0, 0].axvline(percentile_dict[segment],
+  color='green', linestyle='--',
+                         label=f'Quantile threshold:
+  {percentile_dict[segment]:.4f}')
+      axes[0, 0].set_xlabel('delta_opex/rev')
+      axes[0, 0].set_ylabel('Frequency')
+      axes[0, 0].set_title('Distribution Comparison')        
+      axes[0, 0].legend()
+      axes[0, 0].grid(alpha=0.3)
+
+      # 2. Tail comparison (zoom into high values)
+      axes[0, 1].hist(segment_data_A[segment_data_A >        
+  percentile_dict[segment]],
+                      bins=30, alpha=0.5, label='Scenario A',
+   color='blue')
+      axes[0, 1].hist(segment_data_B[segment_data_B >        
+  percentile_dict[segment]],
+                      bins=30, alpha=0.5, label='Scenario B',
+   color='red')
+      axes[0, 1].set_xlabel('delta_opex/rev')
+      axes[0, 1].set_ylabel('Frequency')
+      axes[0, 1].set_title('Tail Distribution (Above
+  Quantile)')
+      axes[0, 1].legend()
+      axes[0, 1].grid(alpha=0.3)
+
+      # 3. QQ plot comparison
+      from scipy import stats
+      stats.probplot(segment_data_A, dist="norm",
+  plot=axes[1, 0])
+      axes[1, 0].get_lines()[0].set_color('blue')
+      axes[1, 0].get_lines()[0].set_label('Scenario A')      
+      axes[1, 0].set_title('Normal Q-Q Plot Scenario A')    
+      axes[1, 0].legend()
+
+      # 4. Summary statistics table
+      axes[1, 1].axis('off')
+      summary_text = f"""
+      Summary Statistics Comparison
+      ══════════════════════════════════════
+
+      Scenario A (Exclude from winsorization):
+        • Mean: {segment_data_A.mean():.6f}
+        • Median: {segment_data_A.median():.6f}
+        • Std: {segment_data_A.std():.6f}
+        • Max: {segment_data_A.max():.6f}
+        • 95th: {segment_data_A.quantile(0.95):.6f}
+        • 99th: {segment_data_A.quantile(0.99):.6f}
+
+      Scenario B (Include in winsorization):
+        • Mean: {segment_data_B.mean():.6f}
+        • Median: {segment_data_B.median():.6f}
+        • Std: {segment_data_B.std():.6f}
+        • Max: {segment_data_B.max():.6f}
+        • 95th: {segment_data_B.quantile(0.95):.6f}
+        • 99th: {segment_data_B.quantile(0.99):.6f}
+
+      Differences (B - A):
+        • Δ Mean: {segment_data_B.mean() -
+  segment_data_A.mean():.6f}
+        • Δ Median: {segment_data_B.median() -
+  segment_data_A.median():.6f}
+        • Δ Std: {segment_data_B.std() -
+  segment_data_A.std():.6f}
+        • Δ Max: {segment_data_B.max() -
+  segment_data_A.max():.6f}
+      """
+
+      axes[1, 1].text(0.05, 0.95, summary_text,
+  transform=axes[1, 1].transAxes,
+                     fontsize=9, verticalalignment='top',    
+  fontfamily='monospace',
+                     bbox=dict(boxstyle='round',
+  facecolor='wheat', alpha=0.3))
+
+      plt.tight_layout()
+      return fig
+
+  5. Business Logic Decision Framework
+
+  The key question is: Should values in exclude_set be      
+  winsorized?
+
+  Arguments for EXCLUDING from winsorization (current code):
+  - Avoids double-dampening: exclude_set already dampened at
+  line 1959
+  - Preserves the original dampening intent for flagged      
+  outliers
+  - The exclusion list is manually curated, so those values  
+  have special treatment
+
+  Arguments for INCLUDING in winsorization:
+  - Ensures consistency: ALL values above quantile are      
+  treated the same
+  - The first dampening (multiply by dampner_val) may not be
+  enough
+  - Winsorization is a separate outlier control mechanism    
+
+  6. Recommendation
+
+  Check these specific metrics:
+
+  # Key diagnostic: Are values in exclude_set still "extreme"
+   after first dampening?
+  def check_post_dampening_extremes(Opex_data, exclude_set,  
+  percentile_dict, dampner_val, id_column_name):
+      """
+      After first dampening, are exclude_set values still    
+  above quantile?
+      """
+      for segment in Opex_data["TOPS"].unique():
+          segment_data = Opex_data[Opex_data["TOPS"] ==      
+  segment].copy()
+          quantile_value = percentile_dict[segment]
+
+          in_exclude = segment_data[["DATE_OF_FINANCIALS",  
+  id_column_name]].apply(
+              tuple, axis=1
+          ).isin(exclude_set)
+
+          excluded_values_after_damp =
+  segment_data.loc[in_exclude, "delta_opex/rev"]
+
+          still_above = (excluded_values_after_damp >        
+  quantile_value).sum()
+
+          print(f"\n{segment}:")
+          print(f"  Excluded values: {in_exclude.sum()}")    
+          print(f"  Still above quantile after dampening:    
+  {still_above}")
+          print(f"  Quantile threshold:
+  {quantile_value:.6f}")
+          if still_above > 0:
+              print(f"  Max excluded value:
+  {excluded_values_after_damp.max():.6f}")
+              print(f"  Mean excluded value:
+  {excluded_values_after_damp.mean():.6f}")
+
+  If dampned_for_revenue_outlier=True and dampner_val=0.0001:
+   Values are reduced to ~0, so they'll be BELOW quantile →  
+  winsorization exclusion doesn't matter.
+
+  If dampned_for_revenue_outlier=False and dampner_val=1:    
+  Values are unchanged, so they may STILL BE above quantile →
+   winsorization exclusion DOES matter!
