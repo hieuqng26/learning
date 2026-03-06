@@ -545,6 +545,7 @@ Selection Scores:
   • Stability: {selection.get('stability_score', np.nan):.3f}
   • Goodness-of-Fit: {selection.get('gof_score', np.nan):.3f}
   • Exceedance Balance: {selection.get('exceedance_score', np.nan):.3f}
+  • MRL Linearity: {selection.get('mrl_score', np.nan):.3f}
   • Composite: {selection.get('composite_score', np.nan):.3f}
 
 Method: {selection['method']}
