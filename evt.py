@@ -244,7 +244,8 @@ class ThresholdSelector:
         return pd.DataFrame(results)
 
     def automated_selection(self, min_exceedances=30, max_exceedances=200,
-                          stability_weight=0.4, gof_weight=0.3, exceedance_weight=0.3):
+                          stability_weight=0.3, gof_weight=0.25, exceedance_weight=0.25,
+                          mrl_weight=0.2):
         """
         Automated threshold selection using composite scoring.
 
@@ -252,6 +253,7 @@ class ThresholdSelector:
         1. Parameter stability (low variance in xi)
         2. Goodness-of-fit (high p-value)
         3. Number of exceedances (balance bias-variance)
+        4. MRL linearity (R² of linear fit to MRL above threshold)
 
         Parameters:
         -----------
@@ -265,6 +267,8 @@ class ThresholdSelector:
             Weight for goodness-of-fit criterion (0-1)
         exceedance_weight : float
             Weight for exceedance count criterion (0-1)
+        mrl_weight : float
+            Weight for MRL linearity criterion (0-1)
 
         Returns:
         --------
@@ -343,11 +347,34 @@ class ThresholdSelector:
         else:
             param_df['exceedance_score'] = 1.0
 
+        # Score 4: MRL linearity (R² of linear fit to MRL at thresholds >= u)
+        mrl_df = self.mean_residual_life(n_thresholds=60)
+        if not mrl_df.empty:
+            mrl_scores = []
+            for u in param_df['threshold']:
+                tail = mrl_df[mrl_df['threshold'] >= u]
+                if len(tail) >= 3:
+                    x = tail['threshold'].values
+                    y = tail['mrl'].values
+                    # R² of linear fit
+                    coeffs = np.polyfit(x, y, 1)
+                    y_hat = np.polyval(coeffs, x)
+                    ss_res = ((y - y_hat) ** 2).sum()
+                    ss_tot = ((y - y.mean()) ** 2).sum()
+                    r2 = 1 - ss_res / ss_tot if ss_tot > 0 else 1.0
+                    mrl_scores.append(max(r2, 0.0))
+                else:
+                    mrl_scores.append(0.5)  # neutral when insufficient tail points
+            param_df['mrl_score'] = mrl_scores
+        else:
+            param_df['mrl_score'] = 0.5
+
         # Composite score
         param_df['composite_score'] = (
             stability_weight * param_df['stability_score'] +
             gof_weight * param_df['gof_score'] +
-            exceedance_weight * param_df['exceedance_score']
+            exceedance_weight * param_df['exceedance_score'] +
+            mrl_weight * param_df['mrl_score']
         )
 
         # Select optimal
@@ -363,10 +390,11 @@ class ThresholdSelector:
             'stability_score': optimal_row['stability_score'],
             'gof_score': optimal_row.get('gof_score', np.nan),
             'exceedance_score': optimal_row['exceedance_score'],
+            'mrl_score': optimal_row['mrl_score'],
             'composite_score': optimal_row['composite_score'],
             'method': 'automated_composite',
             'all_candidates': param_df[['threshold', 'threshold_percentile', 'n_exceedances',
-                                       'xi', 'composite_score']].to_dict('records')
+                                       'xi', 'mrl_score', 'composite_score']].to_dict('records')
         }
 
     def plot_diagnostics(self, save_path=None, figsize=(16, 12)):
