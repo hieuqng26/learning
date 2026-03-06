@@ -245,13 +245,13 @@ class ThresholdSelector:
 
     def automated_selection(self, min_exceedances=30, max_exceedances=200,
                           stability_weight=0.4, exceedance_weight=0.3,
-                          mrl_weight=0.3):
+                          mrl_weight=0.3, gof_weight=0.0, min_gof_pvalue=0.05):
         """
         Automated threshold selection using composite scoring.
 
         Combines multiple criteria:
         1. Parameter stability (low variance in xi)
-        2. Goodness-of-fit (hard filter: ks_pvalue > 0.05 required)
+        2. Goodness-of-fit (hard filter at min_gof_pvalue; optionally scored)
         3. Number of exceedances (balance bias-variance)
         4. MRL linearity (R² of linear fit to MRL above threshold)
 
@@ -267,6 +267,13 @@ class ThresholdSelector:
             Weight for exceedance count criterion (0-1)
         mrl_weight : float
             Weight for MRL linearity criterion (0-1)
+        gof_weight : float
+            Weight for GoF score (0-1). When 0 (default), GoF is a hard
+            filter only — candidates failing min_gof_pvalue are dropped.
+            When > 0, GoF also contributes to the composite score.
+        min_gof_pvalue : float
+            Minimum KS p-value required. Candidates below this are filtered
+            out before scoring (fallback: keep all if none pass).
 
         Returns:
         --------
@@ -315,7 +322,7 @@ class ThresholdSelector:
         else:
             param_df['stability_score'] = 1.0
 
-        # Filter 2: Goodness-of-fit (hard filter — must pass KS test at 5% level)
+        # Goodness-of-fit: hard filter + optional score contribution
         gof_df = self.goodness_of_fit_scores(
             thresholds=param_df['threshold'].values,
             n_thresholds=len(param_df)
@@ -328,10 +335,15 @@ class ThresholdSelector:
                 how='left'
             )
             param_df['ks_pvalue'] = param_df['ks_pvalue'].fillna(0)
-            passing = param_df[param_df['ks_pvalue'] > 0.05]
+            passing = param_df[param_df['ks_pvalue'] > min_gof_pvalue]
             if not passing.empty:
                 param_df = passing
             # else: no candidates pass — keep all and let other scores decide
+        else:
+            param_df['ks_pvalue'] = np.nan
+
+        if gof_weight > 0:
+            param_df['gof_score'] = param_df['ks_pvalue'].fillna(0.5)
 
         # Score 3: Exceedance count (prefer middle range)
         # Optimal is around 50-100 exceedances
@@ -369,7 +381,8 @@ class ThresholdSelector:
         param_df['composite_score'] = (
             stability_weight * param_df['stability_score'] +
             exceedance_weight * param_df['exceedance_score'] +
-            mrl_weight * param_df['mrl_score']
+            mrl_weight * param_df['mrl_score'] +
+            (gof_weight * param_df['gof_score'] if gof_weight > 0 else 0)
         )
 
         # Select optimal
@@ -384,6 +397,7 @@ class ThresholdSelector:
             'sigma': optimal_row['sigma'],
             'stability_score': optimal_row['stability_score'],
             'ks_pvalue': optimal_row.get('ks_pvalue', np.nan),
+            'gof_score': optimal_row.get('gof_score', np.nan),
             'exceedance_score': optimal_row['exceedance_score'],
             'mrl_score': optimal_row['mrl_score'],
             'composite_score': optimal_row['composite_score'],
@@ -538,7 +552,7 @@ GPD Parameters (at optimal threshold):
 
 Selection Scores:
   • Stability: {selection.get('stability_score', np.nan):.3f}
-  • KS p-value: {selection.get('ks_pvalue', np.nan):.3f} (filter: >0.05)
+  • KS p-value: {selection.get('ks_pvalue', np.nan):.3f} (hard filter){f" | GoF score: {selection['gof_score']:.3f}" if not np.isnan(selection.get('gof_score', np.nan)) else ""}
   • Exceedance Balance: {selection.get('exceedance_score', np.nan):.3f}
   • MRL Linearity: {selection.get('mrl_score', np.nan):.3f}
   • Composite: {selection.get('composite_score', np.nan):.3f}
