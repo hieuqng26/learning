@@ -244,14 +244,16 @@ class ThresholdSelector:
         return pd.DataFrame(results)
 
     def automated_selection(self, min_exceedances=30, max_exceedances=200,
-                          stability_weight=0.4, gof_weight=0.3, exceedance_weight=0.3):
+                          stability_weight=0.4, exceedance_weight=0.3,
+                          mrl_weight=0.3, gof_weight=0.0, min_gof_pvalue=0.05):
         """
         Automated threshold selection using composite scoring.
 
         Combines multiple criteria:
         1. Parameter stability (low variance in xi)
-        2. Goodness-of-fit (high p-value)
+        2. Goodness-of-fit (hard filter at min_gof_pvalue; optionally scored)
         3. Number of exceedances (balance bias-variance)
+        4. MRL linearity (R² of linear fit to MRL above threshold)
 
         Parameters:
         -----------
@@ -261,10 +263,17 @@ class ThresholdSelector:
             Maximum exceedances to consider (beyond this, bias increases)
         stability_weight : float
             Weight for stability criterion (0-1)
-        gof_weight : float
-            Weight for goodness-of-fit criterion (0-1)
         exceedance_weight : float
             Weight for exceedance count criterion (0-1)
+        mrl_weight : float
+            Weight for MRL linearity criterion (0-1)
+        gof_weight : float
+            Weight for GoF score (0-1). When 0 (default), GoF is a hard
+            filter only — candidates failing min_gof_pvalue are dropped.
+            When > 0, GoF also contributes to the composite score.
+        min_gof_pvalue : float
+            Minimum KS p-value required. Candidates below this are filtered
+            out before scoring (fallback: keep all if none pass).
 
         Returns:
         --------
@@ -313,25 +322,28 @@ class ThresholdSelector:
         else:
             param_df['stability_score'] = 1.0
 
-        # Score 2: Goodness-of-fit
+        # Goodness-of-fit: hard filter + optional score contribution
         gof_df = self.goodness_of_fit_scores(
             thresholds=param_df['threshold'].values,
             n_thresholds=len(param_df)
         )
 
         if not gof_df.empty:
-            # Merge GOF scores
             param_df = param_df.merge(
                 gof_df[['threshold', 'ks_pvalue']],
                 on='threshold',
                 how='left'
             )
-
-            # Normalize p-value (higher is better)
-            param_df['ks_pvalue'] = param_df['ks_pvalue'].fillna(0.5)
-            param_df['gof_score'] = param_df['ks_pvalue']
+            param_df['ks_pvalue'] = param_df['ks_pvalue'].fillna(0)
+            passing = param_df[param_df['ks_pvalue'] > min_gof_pvalue]
+            if not passing.empty:
+                param_df = passing
+            # else: no candidates pass — keep all and let other scores decide
         else:
-            param_df['gof_score'] = 0.5
+            param_df['ks_pvalue'] = np.nan
+
+        if gof_weight > 0:
+            param_df['gof_score'] = param_df['ks_pvalue'].fillna(0.5)
 
         # Score 3: Exceedance count (prefer middle range)
         # Optimal is around 50-100 exceedances
@@ -343,11 +355,34 @@ class ThresholdSelector:
         else:
             param_df['exceedance_score'] = 1.0
 
+        # Score 4: MRL linearity (R² of linear fit to MRL at thresholds >= u)
+        mrl_df = self.mean_residual_life(n_thresholds=60)
+        if not mrl_df.empty:
+            mrl_scores = []
+            for u in param_df['threshold']:
+                tail = mrl_df[mrl_df['threshold'] >= u]
+                if len(tail) >= 3:
+                    x = tail['threshold'].values
+                    y = tail['mrl'].values
+                    # R² of linear fit
+                    coeffs = np.polyfit(x, y, 1)
+                    y_hat = np.polyval(coeffs, x)
+                    ss_res = ((y - y_hat) ** 2).sum()
+                    ss_tot = ((y - y.mean()) ** 2).sum()
+                    r2 = 1 - ss_res / ss_tot if ss_tot > 0 else 1.0
+                    mrl_scores.append(max(r2, 0.0))
+                else:
+                    mrl_scores.append(0.5)  # neutral when insufficient tail points
+            param_df['mrl_score'] = mrl_scores
+        else:
+            param_df['mrl_score'] = 0.5
+
         # Composite score
         param_df['composite_score'] = (
             stability_weight * param_df['stability_score'] +
-            gof_weight * param_df['gof_score'] +
-            exceedance_weight * param_df['exceedance_score']
+            exceedance_weight * param_df['exceedance_score'] +
+            mrl_weight * param_df['mrl_score'] +
+            (gof_weight * param_df['gof_score'] if gof_weight > 0 else 0)
         )
 
         # Select optimal
@@ -361,12 +396,14 @@ class ThresholdSelector:
             'xi': optimal_row['xi'],
             'sigma': optimal_row['sigma'],
             'stability_score': optimal_row['stability_score'],
+            'ks_pvalue': optimal_row.get('ks_pvalue', np.nan),
             'gof_score': optimal_row.get('gof_score', np.nan),
             'exceedance_score': optimal_row['exceedance_score'],
+            'mrl_score': optimal_row['mrl_score'],
             'composite_score': optimal_row['composite_score'],
             'method': 'automated_composite',
             'all_candidates': param_df[['threshold', 'threshold_percentile', 'n_exceedances',
-                                       'xi', 'composite_score']].to_dict('records')
+                                       'xi', 'mrl_score', 'composite_score']].to_dict('records')
         }
 
     def plot_diagnostics(self, save_path=None, figsize=(16, 12)):
@@ -515,8 +552,9 @@ GPD Parameters (at optimal threshold):
 
 Selection Scores:
   • Stability: {selection.get('stability_score', np.nan):.3f}
-  • Goodness-of-Fit: {selection.get('gof_score', np.nan):.3f}
+  • KS p-value: {selection.get('ks_pvalue', np.nan):.3f} (hard filter){f" | GoF score: {selection['gof_score']:.3f}" if not np.isnan(selection.get('gof_score', np.nan)) else ""}
   • Exceedance Balance: {selection.get('exceedance_score', np.nan):.3f}
+  • MRL Linearity: {selection.get('mrl_score', np.nan):.3f}
   • Composite: {selection.get('composite_score', np.nan):.3f}
 
 Method: {selection['method']}
@@ -823,10 +861,11 @@ class PanelEVT:
         p = 1 - confidence_level
 
         # GPD VaR formula
-        if abs(xi) < 1e-6:  # Exponential case
+        if xi == 0:  # Exact zero: use exponential limit to avoid division by zero
             var = threshold + sigma * np.log(zeta_u / p)
         else:
-            var = threshold + (sigma / xi) * ((zeta_u / p)**(-xi) - 1)
+            # Use expm1 for numerical stability when xi is small
+            var = threshold + sigma * np.expm1(-xi * np.log(p / zeta_u)) / xi
 
         return var
 
