@@ -158,35 +158,35 @@ def interest_expense_run(sector_name):
         )
 
 
-############ Define the summarize_step function to output the datapoints summary table#####
-def summarize_step(
-    df, top_countries_1, c_column_name, step_name, id_column_name="spread_id"
-):
-    financials = df.copy()
-
-    # Step 1: Create a clean grouping column
-    region_list = top_countries_1 + ["Others"]
-    financials["__region__"] = financials[c_column_name].apply(
-        lambda x: x if x in top_countries_1 else "Others"
-    )
-
-    # Step 2: Generate summary
-    summary = []
-    for region in region_list:
-        df_region = financials[financials["__region__"] == region]
-        counts = df_region["Portfolio"].value_counts()
-        summary.append(
-            {
-                "Step": step_name,
-                "Region": region,
-                "Unique spread IDs": df_region[id_column_name].nunique(),
-                "Total datapoints": df_region.shape[0],
-                "LC+CC datapoints": counts.get("LC", 0) + counts.get("CC", 0),
-                "MC datapoints": counts.get("MC", 0),
-            }
+    ############ Define the summarize_step function to output the datapoints summary table#####
+    def summarize_step(
+        df, top_countries_1, c_column_name, step_name, id_column_name="spread_id"
+    ):
+        financials = df.copy()
+    
+        # Step 1: Create a clean grouping column
+        region_list = top_countries_1 + ["Others"]
+        financials["__region__"] = financials[c_column_name].apply(
+            lambda x: x if x in top_countries_1 else "Others"
         )
-
-    return pd.DataFrame(summary)
+    
+        # Step 2: Generate summary
+        summary = []
+        for region in region_list:
+            df_region = financials[financials["__region__"] == region]
+            counts = df_region["Portfolio"].value_counts()
+            summary.append(
+                {
+                    "Step": step_name,
+                    "Region": region,
+                    "Unique spread IDs": df_region[id_column_name].nunique(),
+                    "Total datapoints": df_region.shape[0],
+                    "LC+CC datapoints": counts.get("LC", 0) + counts.get("CC", 0),
+                    "MC datapoints": counts.get("MC", 0),
+                }
+            )
+    
+        return pd.DataFrame(summary)
 
 
     ####################
