@@ -137,13 +137,13 @@ def interest_expense_run(sector_name):
         for group_label, countries in country_group_mapping.items():
             for country in countries:
                 reverse_country_map[country] = group_label
-        interest_data["country_of_risk_grouped"] = interest_data[
-            "country_of_risk"
-        ].apply(lambda x, y: reverse_country_map.get(x, y))
-        interest_data.drop(columns=["country_of_risk"], inplace=True)
-        interest_data.rename(
-            columns={"country_of_risk_grouped": "country_of_risk"}, inplace=True
-        )
+            interest_data["country_of_risk_grouped"] = interest_data[
+                "country_of_risk"
+            ].apply(lambda x, y: reverse_country_map.get(x, y))
+            interest_data.drop(columns=["country_of_risk"], inplace=True)
+            interest_data.rename(
+                columns={"country_of_risk_grouped": "country_of_risk"}, inplace=True
+            )
 
     if globalmodel:
         # Build reverse mapping: each country -> group label
@@ -182,7 +182,7 @@ def summarize_step(
                 "Unique spread IDs": df_region[id_column_name].nunique(),
                 "Total datapoints": df_region.shape[0],
                 "LC+CC datapoints": counts.get("LC", 0) + counts.get("CC", 0),
-                "HC datapoints": counts.get("HC", 0),
+                "MC datapoints": counts.get("MC", 0),
             }
         )
 
@@ -254,7 +254,7 @@ summary_4 = summarize_step(
     interest_data,
     top_countries_1,
     c_column_name,
-    step_name="Step 4: Rows after filter irbi=0",
+    step_name="Step 4: Rows after filter irbi!=0",
 )
 
 interest_data = interest_data[
@@ -436,7 +436,7 @@ def process_data_country_sector(
         leid_counts = final.groupby(id_column_name).size()
         leid_wanted = leid_counts[leid_counts > 3].index
         error_df = final[~final[id_column_name].isin(leid_wanted)]
-        error_df = final[final[id_column_name].isin(leid_wanted)]
+        final = final[final[id_column_name].isin(leid_wanted)]
         error_df = pd.concat([error_df, int_expense_issue], ignore_index=True)
     return final
 
@@ -483,7 +483,7 @@ def get_corr_df(data, country, aggregate):
             std_df["interest_rate"]
             / std_df["Monetary policy or key interest rate_4QMA_US"]
         )
-    std_df = std_df.to_dict()
+        std_df = std_df.to_dict()
 
     if not aggregate:
         correlation_per_id = data.groupby(id_column_name).apply(
