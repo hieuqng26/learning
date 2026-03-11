@@ -16,6 +16,7 @@ warnings.filterwarnings("ignore")
 
 from IE_config import *
 
+OUT_DIR = r"C:\Users\1643986\repo\50991-risk-portfolio-analytics\output"
 
 # ============================================================================
 # HELPER FUNCTIONS
@@ -315,7 +316,7 @@ def interest_expense(
     else:
         final = get_corr_df(data, country, aggregate, id_column_name, alpha_min, alpha_max)
 
-        # Attach portfolio labels (LC / CC / HC) to entity-level results
+        # Attach portfolio labels (LC / CC / MC) to entity-level results
         if not aggregate:
             final = final.merge(
                 interest_data[["spread_id", "Portfolio"]],
@@ -407,7 +408,7 @@ def agg_results(input_data, top_countries):
 
 
 def split_portfolio(data, portfolio, both_level_df, top_countries):
-    """Split portfolio results by currency type (LC_CC or HC) and group non-top countries into 'Others'."""
+    """Split portfolio results by currency type (LC_CC or MC) and group non-top countries into 'Others'."""
     output = both_level_df[both_level_df["Portfolio"] == portfolio]
     df1 = output.loc[data["Country"].isin(top_countries)]
     df2 = output.loc[~data["Country"].isin(top_countries)]
@@ -692,18 +693,6 @@ def interest_expense_run(sector_name):
     MEV_file_path = IE_config.MEV_file_path
     isic_file_path = IE_config.isic_file_path
 
-    output_path = windows_long_path(
-        f"{OUT_DIR}/{sector}/interest_expense_{sector_short}.xlsx"
-    )
-
-    pdf_path = windows_long_path(
-        f"{OUT_DIR}/{sector}/interest_expense_{sector_short}.pdf"
-    )
-
-    sum_path = windows_long_path(
-        f"{OUT_DIR}/{sector}/IE_Data_Points_{sector_short}.xlsx"
-    )
-
     consolid_path = windows_long_path(
         f"{OUT_DIR}/{sector}/consolidated_results_{sector_short}.xlsx"
     )
@@ -795,7 +784,7 @@ def interest_expense_run(sector_name):
                 reverse_country_map[country] = group_label
             interest_data["country_of_risk_grouped"] = interest_data[
                 "country_of_risk"
-            ].apply(lambda x, y: reverse_country_map.get(x, y))
+            ].apply(lambda x: reverse_country_map.get(x, x))
             interest_data.drop(columns=["country_of_risk"], inplace=True)
             interest_data.rename(
                 columns={"country_of_risk_grouped": "country_of_risk"}, inplace=True
@@ -875,7 +864,7 @@ def interest_expense_run(sector_name):
         interest_data,
         top_countries_1,
         c_column_name,
-        step_name="Step 4: Rows after filter irbi!=0",
+        step_name="Step 4: Rows after filter irb!=0",
     )
 
     interest_data = interest_data[
@@ -1315,7 +1304,7 @@ def interest_expense_run(sector_name):
 
     agg_output = agg_results(agg_frame, top_countries)
     LC_CC_split_output = split_portfolio(both_level_df, "LC_CC", both_level_df, top_countries)
-    MC_split_output = split_portfolio(both_level_df, "HC", both_level_df, top_countries)
+    MC_split_output = split_portfolio(both_level_df, "MC", both_level_df, top_countries)
 
     agg_output = pd.melt(
         agg_output,
@@ -1495,7 +1484,7 @@ def interest_expense_run(sector_name):
                     {
                         "Country": country,
                         "date": agg_data.iloc[i]["DATE_OF_FINANCIALS"],
-                        "Alpha": alpha,
+                        "Alpha": summary_alpha,
                         "pred_change": pred_interest_change,
                         "actual_change": agg_data.iloc[i]["future_interest_change"],
                     }
@@ -1569,7 +1558,7 @@ def interest_expense_run(sector_name):
         id_alpha_ts_df["actual_change"], method="spearman"
     )
     id_alpha_ts_df["rank_ic"] = id_rank_ic
-    id_alpha_ts_df["HSE"] = (
+    id_alpha_ts_df["MSE"] = (
         id_alpha_ts_df["pred_change"] - id_alpha_ts_df["actual_change"]
     ) ** 2
     id_alpha_ts_df["MAE"] = (
@@ -1588,7 +1577,7 @@ def interest_expense_run(sector_name):
         agg_alpha_ts_df["actual_change"], method="spearman"
     )
     agg_alpha_ts_df["rank_ic"] = agg_rank_ic
-    agg_alpha_ts_df["HSE"] = (
+    agg_alpha_ts_df["MSE"] = (
         agg_alpha_ts_df["pred_change"] - agg_alpha_ts_df["actual_change"]
     ) ** 2
     agg_alpha_ts_df["MAE"] = (
@@ -1607,7 +1596,7 @@ def interest_expense_run(sector_name):
         summary_ts_df["actual_change"], method="spearman"
     )
     summary_ts_df["rank_ic"] = rank_ic
-    summary_ts_df["HSE"] = (
+    summary_ts_df["MSE"] = (
         summary_ts_df["pred_change"] - summary_ts_df["actual_change"]
     ) ** 2
     summary_ts_df["MAE"] = (
@@ -1706,10 +1695,10 @@ def interest_expense_run(sector_name):
     spread_ids_wide_renamed = spread_ids_wide.add_suffix("-spread_ids")
     concat_df = pd.concat([datapoints_wide_renamed, spread_ids_wide_renamed], axis=1)
 
-    # ---- Step 4: Create wide table for HC, LC, CC ----
-    portfolio_table = {
-        summary_all.groupby("Step")[["LC+CC datapoints", "HC datapoints"]].sum()
-    }
+    # ---- Step 4: Create wide table for MC, LC, CC ----
+    portfolio_table = (
+        summary_all.groupby("Step")[["LC+CC datapoints", "MC datapoints"]].sum()
+    )
 
     steps_df = pd.concat([concat_df, portfolio_table], axis=1)
     steps_df = steps_df.reset_index()
@@ -1733,7 +1722,7 @@ def interest_expense_run(sector_name):
             data=interest_data_df["interest_rate"],
             chartTitle="Interest Rate Distribution full data(before filtering >0.5)",
             workbook=wb,
-            sheet_name="interest rate charts full",
+            sheet_name="Interest rate charts full",
             bin_edges=np.arange(0, 1.2, 0.02),
             percentiles_for_chart=percentiles_for_chart,
             xrange=(0, 1),
@@ -1746,7 +1735,7 @@ def interest_expense_run(sector_name):
             data=filtered_data,
             chartTitle="Interest Rate Distribution full data(after filtering >0.5)",
             workbook=wb,
-            sheet_name="interest rate charts filtered",
+            sheet_name="Interest rate charts filtered",
             bin_edges=np.arange(0, 0.6, 0.02),
             percentiles_for_chart=percentiles_for_chart,
             xrange=(0, 0.6),
@@ -1789,7 +1778,7 @@ def interest_expense_run(sector_name):
 
 if __name__ == "__main__":
     for sector in [
-        "D&G",
+        "O&G",
         # "Commodity Traders",
         # "Metals & Mining",
         # "Automobiles & Components",
