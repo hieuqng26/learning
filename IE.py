@@ -189,1059 +189,1120 @@ def summarize_step(
     return pd.DataFrame(summary)
 
 
-####################
-# convert 'irb_ead' to float with coercion of invalid values
-interest_data["irb_ead"] = pd.to_numeric(interest_data["irb_ead"], errors="coerce")
-
-# Replace "Missing" and "Not applicable" with NaN
-interest_data["InterestExpense"] = pd.to_numeric(
-    interest_data["InterestExpense"].replace(["Missing", "Not applicable"], np.nan),
-    errors="coerce",
-)
-
-interest_data["TotalDebt"] = pd.to_numeric(
-    interest_data["TotalDebt"].replace(["Missing", "Not applicable"], np.nan),
-    errors="coerce",
-)
-
-# Print row count before dropping NaNs
-print("Rows before dropping NA:", len(interest_data))
-summary_1 = summarize_step(
-    interest_data,
-    top_countries_1,
-    c_column_name,
-    step_name="Step 1: Rows before dropping NA",
-)
-
-# Drop rows where InterestExpense or TotalDebt is NaN
-interest_data = interest_data.dropna(subset=["InterestExpense", "TotalDebt"])
-# Print row count after dropping NaNs
-print("Rows after dropping NA:", len(interest_data))
-summary_2 = summarize_step(
-    interest_data,
-    top_countries_1,
-    c_column_name,
-    step_name="Step 2: Rows after dropping NA in InterestExpense and TotalDebt",
-)
-
-interest_data["DATE_OF_FINANCIALS"] = pd.to_datetime(
-    interest_data["DATE_OF_FINANCIALS"]
-)
-interest_data["Year"] = interest_data["DATE_OF_FINANCIALS"].dt.year
-interest_data["Month"] = interest_data["DATE_OF_FINANCIALS"].dt.month
-
-interest_data = interest_data.sort_values(
-    by=[id_column_name, "Year", "Month"], ascending=[True, True, False]
-)
-
-interest_data = interest_data.drop_duplicates(
-    subset=[id_column_name, "Year"], keep="first"
-)
-
-print(f"shape before drop the quarterly data: {interest_data.shape}")
-print(f"shape af drop the quarterly data: {interest_data.shape}")
-
-summary_3 = summarize_step(
-    interest_data,
-    top_countries_1,
-    c_column_name,
-    step_name="Step 3: Rows after keep one data point for one year",
-)
-
-########################
-interest_data = interest_data[interest_data.irb_ead != 0]
-summary_4 = summarize_step(
-    interest_data,
-    top_countries_1,
-    c_column_name,
-    step_name="Step 4: Rows after filter irbi!=0",
-)
-
-interest_data = interest_data[
-    interest_data["TotalDebt"] != 0
-]  # remove the rows where total debt is 0
-summary_5 = summarize_step(
-    interest_data,
-    top_countries_1,
-    c_column_name,
-    step_name="Step 5: Rows after filter totaldebt!=0",
-)
-
-if exclude_IE_Zero:  # define this in config
-    interest_data = interest_data[interest_data["InterestExpense"] != 0]
-# check interest expense too large -----> interest expense/totalDebt > 0.5, data issue, need to be handled separately
-
-summary_6 = summarize_step(
-    interest_data,
-    top_countries_1,
-    c_column_name,
-    step_name="Step 6: Rows after filter ie !=0",
-)
-
-interest_data["interest_rate"] = (
-    interest_data["InterestExpense"] / interest_data["TotalDebt"]
-)
-
-interest_data_df = interest_data[["spread_id", "DATE_OF_FINANCIALS", "InterestExpense", "TotalDebt", "interest_rate"]]
-interest_data_df["interest_expense_issue"] = interest_data_df["interest_rate"].apply(lambda x: 'T' if x > 0.5 else 'F')
-
-# filter modelling data that interest_rate <=0.5
-int_expense_issue = interest_data[interest_data["interest_rate"] > 0.5]
-interest_data = interest_data[interest_data["interest_rate"] <= 0.5]
-
-summary_7 = summarize_step(
-    interest_data,
-    top_countries_1,
-    c_column_name,
-    step_name="Step 7: Rows after filter interest_rate<=0.5",
-)
-
-## filter for interest rate data after year 2018
-int_before_2018 = interest_data[interest_data["Year"] < 2018]
-interest_data = interest_data[interest_data["Year"] >= 2018]
-
-summary_8 = summarize_step(
-    interest_data,
-    top_countries_1,
-    c_column_name,
-    step_name="Step 8: Rows after filter interest_rate year before 2018",
-)
-
-## to aggregate to each quarter having 1 datapoint country wise
-agg_interest_data = (
-    interest_data.groupby(["country_of_risk", pd.Grouper(key="DATE_OF_FINANCIALS", freq="Q")])
-    .agg(
-        {
-            "InterestExpense": "mean",
-            "TotalDebt": "mean",
-            "interest_rate": "mean",
-            "RA_Industry": "first",
-            "sub_segment": "first",
-            "irb_ead": "mean",
-        }
+    ####################
+    # convert 'irb_ead' to float with coercion of invalid values
+    interest_data["irb_ead"] = pd.to_numeric(interest_data["irb_ead"], errors="coerce")
+    
+    # Replace "Missing" and "Not applicable" with NaN
+    interest_data["InterestExpense"] = pd.to_numeric(
+        interest_data["InterestExpense"].replace(["Missing", "Not applicable"], np.nan),
+        errors="coerce",
     )
-    .reset_index()
-)
-agg_interest_data.dropna()
-
-# -----------------
-def MEV_data_processing(country, MEVdata):
-    MEVdata_interest_rate = MEVdata[
-        ["Date", f"{country}_Monetary policy or key interest rate"]
-    ].copy()
-    MEVdata_interest_rate = MEVdata_interest_rate[
-        MEVdata_interest_rate["Date"] >= "2018-01-01"
-    ]
-    MEVdata_interest_rate["Date"] = pd.to_datetime(
-        MEVdata_interest_rate["Date"], format="%Y-%m-%d"
+    
+    interest_data["TotalDebt"] = pd.to_numeric(
+        interest_data["TotalDebt"].replace(["Missing", "Not applicable"], np.nan),
+        errors="coerce",
     )
-    MEVdata_interest_rate["Year"] = MEVdata_interest_rate["Date"].apply(
-        lambda x: x.year
-    )
-    MEVdata_interest_rate[
-        f"{country}_Monetary policy or key interest rate_4QMA"
-    ] = (
-        MEVdata_interest_rate[f"{country}_Monetary policy or key interest rate"]
-        .rolling(window=4)
-        .mean()
-        / 100
-    )
-
-    return MEVdata_interest_rate
-
-
-# -----------------
-def MEV_data_processing_before2018(country, MEVdata):
-    MEVdata_interest_rate = MEVdata[
-        ["Date", f"{country}_Monetary policy or key interest rate"]
-    ].copy()
-    MEVdata_interest_rate = MEVdata_interest_rate[
-        MEVdata_interest_rate["Date"] < "2018-01-01"
-    ]
-    MEVdata_interest_rate["Date"] = pd.to_datetime(
-        MEVdata_interest_rate["Date"], format="%Y-%m-%d"
-    )
-    MEVdata_interest_rate["Year"] = MEVdata_interest_rate["Date"].apply(
-        lambda x: x.year
-    )
-    MEVdata_interest_rate[
-        f"{country}_Monetary policy or key interest rate_4QMA"
-    ] = (
-        MEVdata_interest_rate[f"{country}_Monetary policy or key interest rate"]
-        .rolling(window=4)
-        .mean()
-        / 100
-    )
-
-    return MEVdata_interest_rate
-
-
-# --------
-def process_data_country_sector(
-    interest_data,
-    MEVdata,
-    country,
-    sector,
-    aggregate,
-):
-    if sector == "Global":
-        interest_data = interest_data[((interest_data.country_of_risk == country))]
-    else:
-        interest_data = interest_data[
-            (
-                (interest_data.RA_Industry == sector)
-                & (interest_data.country_of_risk == country)
-            )
-        ]
-
-    # MEV data select
-    MEVdata_groupby_US = MEV_data_processing("US", MEVdata)
-    MEVdata_groupby_US = MEVdata_groupby_US.rename(
-        columns={
-            "US_Monetary policy or key interest rate_4QMA": "Monetary policy or key interest rate_4QMA_US"
-        }
-    )
-
-    country_data_avaliable_flag = 0
-    try:
-        MEVdata_groupby = MEV_data_processing(country, MEVdata)
-
-    except:
-        # print(f"Central bank data for country {country} is not avaliable!")
-        MEVdata_groupby = MEVdata_groupby_US
-        country_data_avaliable_flag = 1
-
-    interest_data["DATE_OF_FINANCIALS"] = pd.to_datetime(
-        interest_data["DATE_OF_FINANCIALS"], format="%Y-%m-%d"
-    )
-
-    final = pd.merge(
+    
+    # Print row count before dropping NaNs
+    print("Rows before dropping NA:", len(interest_data))
+    summary_1 = summarize_step(
         interest_data,
-        MEVdata_groupby,
-        left_on="DATE_OF_FINANCIALS",
-        right_on="Date",
+        top_countries_1,
+        c_column_name,
+        step_name="Step 1: Rows before dropping NA",
     )
-
-    if country_data_avaliable_flag == 1:
-        final[f"{country}_Monetary policy or key interest rate_4QMA"] = np.nan
-    else:
+    
+    # Drop rows where InterestExpense or TotalDebt is NaN
+    interest_data = interest_data.dropna(subset=["InterestExpense", "TotalDebt"])
+    # Print row count after dropping NaNs
+    print("Rows after dropping NA:", len(interest_data))
+    summary_2 = summarize_step(
+        interest_data,
+        top_countries_1,
+        c_column_name,
+        step_name="Step 2: Rows after dropping NA in InterestExpense and TotalDebt",
+    )
+    
+    interest_data["DATE_OF_FINANCIALS"] = pd.to_datetime(
+        interest_data["DATE_OF_FINANCIALS"]
+    )
+    interest_data["Year"] = interest_data["DATE_OF_FINANCIALS"].dt.year
+    interest_data["Month"] = interest_data["DATE_OF_FINANCIALS"].dt.month
+    
+    interest_data = interest_data.sort_values(
+        by=[id_column_name, "Year", "Month"], ascending=[True, True, False]
+    )
+    
+    interest_data = interest_data.drop_duplicates(
+        subset=[id_column_name, "Year"], keep="first"
+    )
+    
+    print(f"shape before drop the quarterly data: {interest_data.shape}")
+    print(f"shape af drop the quarterly data: {interest_data.shape}")
+    
+    summary_3 = summarize_step(
+        interest_data,
+        top_countries_1,
+        c_column_name,
+        step_name="Step 3: Rows after keep one data point for one year",
+    )
+    
+    ########################
+    interest_data = interest_data[interest_data.irb_ead != 0]
+    summary_4 = summarize_step(
+        interest_data,
+        top_countries_1,
+        c_column_name,
+        step_name="Step 4: Rows after filter irbi!=0",
+    )
+    
+    interest_data = interest_data[
+        interest_data["TotalDebt"] != 0
+    ]  # remove the rows where total debt is 0
+    summary_5 = summarize_step(
+        interest_data,
+        top_countries_1,
+        c_column_name,
+        step_name="Step 5: Rows after filter totaldebt!=0",
+    )
+    
+    if exclude_IE_Zero:  # define this in config
+        interest_data = interest_data[interest_data["InterestExpense"] != 0]
+    # check interest expense too large -----> interest expense/totalDebt > 0.5, data issue, need to be handled separately
+    
+    summary_6 = summarize_step(
+        interest_data,
+        top_countries_1,
+        c_column_name,
+        step_name="Step 6: Rows after filter ie !=0",
+    )
+    
+    interest_data["interest_rate"] = (
+        interest_data["InterestExpense"] / interest_data["TotalDebt"]
+    )
+    
+    interest_data_df = interest_data[["spread_id", "DATE_OF_FINANCIALS", "InterestExpense", "TotalDebt", "interest_rate"]]
+    interest_data_df["interest_expense_issue"] = interest_data_df["interest_rate"].apply(lambda x: 'T' if x > 0.5 else 'F')
+    
+    # filter modelling data that interest_rate <=0.5
+    int_expense_issue = interest_data[interest_data["interest_rate"] > 0.5]
+    interest_data = interest_data[interest_data["interest_rate"] <= 0.5]
+    
+    summary_7 = summarize_step(
+        interest_data,
+        top_countries_1,
+        c_column_name,
+        step_name="Step 7: Rows after filter interest_rate<=0.5",
+    )
+    
+    ## filter for interest rate data after year 2018
+    int_before_2018 = interest_data[interest_data["Year"] < 2018]
+    interest_data = interest_data[interest_data["Year"] >= 2018]
+    
+    summary_8 = summarize_step(
+        interest_data,
+        top_countries_1,
+        c_column_name,
+        step_name="Step 8: Rows after filter interest_rate year before 2018",
+    )
+    
+    ## to aggregate to each quarter having 1 datapoint country wise
+    agg_interest_data = (
+        interest_data.groupby(["country_of_risk", pd.Grouper(key="DATE_OF_FINANCIALS", freq="Q")])
+        .agg(
+            {
+                "InterestExpense": "mean",
+                "TotalDebt": "mean",
+                "interest_rate": "mean",
+                "RA_Industry": "first",
+                "sub_segment": "first",
+                "irb_ead": "mean",
+            }
+        )
+        .reset_index()
+    )
+    agg_interest_data.dropna()
+    
+    # -----------------
+    def MEV_data_processing(country, MEVdata):
+        MEVdata_interest_rate = MEVdata[
+            ["Date", f"{country}_Monetary policy or key interest rate"]
+        ].copy()
+        MEVdata_interest_rate = MEVdata_interest_rate[
+            MEVdata_interest_rate["Date"] >= "2018-01-01"
+        ]
+        MEVdata_interest_rate["Date"] = pd.to_datetime(
+            MEVdata_interest_rate["Date"], format="%Y-%m-%d"
+        )
+        MEVdata_interest_rate["Year"] = MEVdata_interest_rate["Date"].apply(
+            lambda x: x.year
+        )
+        MEVdata_interest_rate[
+            f"{country}_Monetary policy or key interest rate_4QMA"
+        ] = (
+            MEVdata_interest_rate[f"{country}_Monetary policy or key interest rate"]
+            .rolling(window=4)
+            .mean()
+            / 100
+        )
+    
+        return MEVdata_interest_rate
+    
+    
+    # -----------------
+    def MEV_data_processing_before2018(country, MEVdata):
+        MEVdata_interest_rate = MEVdata[
+            ["Date", f"{country}_Monetary policy or key interest rate"]
+        ].copy()
+        MEVdata_interest_rate = MEVdata_interest_rate[
+            MEVdata_interest_rate["Date"] < "2018-01-01"
+        ]
+        MEVdata_interest_rate["Date"] = pd.to_datetime(
+            MEVdata_interest_rate["Date"], format="%Y-%m-%d"
+        )
+        MEVdata_interest_rate["Year"] = MEVdata_interest_rate["Date"].apply(
+            lambda x: x.year
+        )
+        MEVdata_interest_rate[
+            f"{country}_Monetary policy or key interest rate_4QMA"
+        ] = (
+            MEVdata_interest_rate[f"{country}_Monetary policy or key interest rate"]
+            .rolling(window=4)
+            .mean()
+            / 100
+        )
+    
+        return MEVdata_interest_rate
+    
+    
+    # --------
+    def process_data_country_sector(
+        interest_data,
+        MEVdata,
+        country,
+        sector,
+        aggregate,
+    ):
+        if sector == "Global":
+            interest_data = interest_data[((interest_data.country_of_risk == country))]
+        else:
+            interest_data = interest_data[
+                (
+                    (interest_data.RA_Industry == sector)
+                    & (interest_data.country_of_risk == country)
+                )
+            ]
+    
+        # MEV data select
+        MEVdata_groupby_US = MEV_data_processing("US", MEVdata)
+        MEVdata_groupby_US = MEVdata_groupby_US.rename(
+            columns={
+                "US_Monetary policy or key interest rate_4QMA": "Monetary policy or key interest rate_4QMA_US"
+            }
+        )
+    
+        country_data_avaliable_flag = 0
+        try:
+            MEVdata_groupby = MEV_data_processing(country, MEVdata)
+    
+        except:
+            # print(f"Central bank data for country {country} is not avaliable!")
+            MEVdata_groupby = MEVdata_groupby_US
+            country_data_avaliable_flag = 1
+    
+        interest_data["DATE_OF_FINANCIALS"] = pd.to_datetime(
+            interest_data["DATE_OF_FINANCIALS"], format="%Y-%m-%d"
+        )
+    
         final = pd.merge(
-            final,
-            MEVdata_groupby_US,
+            interest_data,
+            MEVdata_groupby,
             left_on="DATE_OF_FINANCIALS",
             right_on="Date",
         )
-
-    if not aggregate:
-        leid_counts = final.groupby(id_column_name).size()
-        leid_wanted = leid_counts[leid_counts > 3].index
-        error_df = final[~final[id_column_name].isin(leid_wanted)]
-        final = final[final[id_column_name].isin(leid_wanted)]
-        error_df = pd.concat([error_df, int_expense_issue], ignore_index=True)
-    return final
-
-
-# ---------------
-def get_corr_df(data, country, aggregate):
-    if not aggregate:
-        data["No. of data points"] = data[id_column_name]
-        std_df = data.groupby(id_column_name).agg(
-            {
-                "No. of data points": "count",
-                "country_of_risk": "first",
-                "interest_rate": "std",
-                f"{country}_Monetary policy or key interest rate_4QMA": "std",
-                "Monetary policy or key interest rate_4QMA_US": "std",
-                "irb_ead": "first",
-            }
-        )
-        std_df["Sensitvity"] = (
-            std_df["interest_rate"]
-            / std_df[f"{country}_Monetary policy or key interest rate_4QMA"]
-        )
-        std_df["Sensitvity_US"] = (
-            std_df["interest_rate"]
-            / std_df["Monetary policy or key interest rate_4QMA_US"]
-        )
-    else:
-        data["No. of data points"] = len(data["DATE_OF_FINANCIALS"])
-        std_df = data.agg(
-            {
-                "No. of data points": "count",
-                "country_of_risk": lambda x: x.iloc[0],
-                "interest_rate": "std",
-                f"{country}_Monetary policy or key interest rate_4QMA": "std",
-                "Monetary policy or key interest rate_4QMA_US": "std",
-                "irb_ead": lambda x: x.iloc[0],
-            }
-        )
-        std_df["Sensitvity"] = (
-            std_df["interest_rate"]
-            / std_df[f"{country}_Monetary policy or key interest rate_4QMA"]
-        )
-        std_df["Sensitvity_US"] = (
-            std_df["interest_rate"]
-            / std_df["Monetary policy or key interest rate_4QMA_US"]
-        )
-        std_df = std_df.to_dict()
-
-    if not aggregate:
-        correlation_per_id = data.groupby(id_column_name).apply(
-            lambda x: x["interest_rate"].corr(
-                x[f"{country}_Monetary policy or key interest rate_4QMA"]
+    
+        if country_data_avaliable_flag == 1:
+            final[f"{country}_Monetary policy or key interest rate_4QMA"] = np.nan
+        else:
+            final = pd.merge(
+                final,
+                MEVdata_groupby_US,
+                left_on="DATE_OF_FINANCIALS",
+                right_on="Date",
             )
-        )
-
-        correlation_per_id_US = data.groupby(id_column_name).apply(
-            lambda x: x["interest_rate"].corr(
-                x[f"Monetary policy or key interest rate_4QMA_US"]
-            )
-        )
-
-        correlation_df = correlation_per_id.rename("Correlation").reset_index()
-        correlation_df_US = correlation_per_id_US.rename("Correlation_US").reset_index()
-        all_df = pd.merge(std_df, correlation_df, on=id_column_name)
-        all_df = pd.merge(all_df, correlation_df_US, on=id_column_name)
-        all_df["Alpha"] = (all_df["Correlation"] * all_df["Sensitvity"]).clip(
-            lower=alpha_min, upper=alpha_max
-        )
-        all_df["Alpha_US"] = (
-            all_df["Correlation_US"] * all_df["Sensitvity_US"]
-        ).clip(lower=alpha_min, upper=alpha_max)
-    else:
-        correlation_agg = data["interest_rate"].corr(
-            data[f"{country}_Monetary policy or key interest rate_4QMA"]
-        )
-        correlation_agg_US = data["interest_rate"].corr(
-            data[f"Monetary policy or key interest rate_4QMA_US"]
-        )
-
-        std_df["Correlation"] = correlation_agg
-        std_df["Correlation_US"] = correlation_agg_US
-
-        all_df = pd.DataFrame([std_df])
-        all_df["Alpha"] = (all_df["Correlation"] * all_df["Sensitvity"]).clip(
-            lower=alpha_min, upper=alpha_max
-        )
-        all_df["Alpha_US"] = (
-            all_df["Correlation_US"] * all_df["Sensitvity_US"]
-        ).clip(lower=alpha_min, upper=alpha_max)
-
-    all_df = all_df.rename(
-        columns={
-            "country_of_risk": "Country",
-            "interest_rate": "Interest Rate Std Dev",
-            f"{country}_Monetary policy or key interest rate_4QMA": "Central bank Interest Rate Std Dev",
-        }
-    )
-
-    return all_df
-
-
-def compute_alpha(window_df, country):
-    corr = window_df["interest_rate"].corr(
-        window_df[f"{country}_Monetary policy or key interest rate_4QMA"]
-    )
-    sensitivity = (
-        window_df["interest_rate"].std()
-        / window_df[f"{country}_Monetary policy or key interest rate_4QMA"].std()
-    )
-    alpha = corr * sensitivity
-    return np.clip(alpha, alpha_min, alpha_max)
-
-
-# ----------
-def interest_expense(interest_data, MEVdata, country, sector, aggregate):
-    data = process_data_country_sector(interest_data, MEVdata, country, sector, aggregate)
-    if len(data) == 0:
-        final = pd.DataFrame()
-    else:
-        final = get_corr_df(data, country, aggregate)
-
-        ## Add portfolio column
+    
         if not aggregate:
-            final = final.merge(
-                interest_data[["spread_id", "Portfolio"]],
-                on="spread_id",
-                how="left",
+            leid_counts = final.groupby(id_column_name).size()
+            leid_wanted = leid_counts[leid_counts > 3].index
+            error_df = final[~final[id_column_name].isin(leid_wanted)]
+            final = final[final[id_column_name].isin(leid_wanted)]
+            error_df = pd.concat([error_df, int_expense_issue], ignore_index=True)
+        return final
+    
+    
+    # ---------------
+    def get_corr_df(data, country, aggregate):
+        if not aggregate:
+            data["No. of data points"] = data[id_column_name]
+            std_df = data.groupby(id_column_name).agg(
+                {
+                    "No. of data points": "count",
+                    "country_of_risk": "first",
+                    "interest_rate": "std",
+                    f"{country}_Monetary policy or key interest rate_4QMA": "std",
+                    "Monetary policy or key interest rate_4QMA_US": "std",
+                    "irb_ead": "first",
+                }
             )
-    return final
-
-
-def cal_country_stats_with_r2(data):
-    buckets = pd.qcut(data["pred_change"], 5, duplicates="drop")
-    bucket_perf = data.groupby(buckets)["actual_change"].mean()
-
-    if len(bucket_perf) < 2:
-        top_minus_bottom = np.nan
-    else:
-        top_minus_bottom = bucket_perf.iloc[-1] - bucket_perf.iloc[0]
-
-        ## OLS
-        X = sm.add_constant(data["pred_change"])
-        y = data["actual_change"]
-        model = sm.OLS(y, X, missing="drop").fit()
-        y_pred = model.predict(X)
-
-        mse_model = np.mean((y - y_pred) ** 2)
-        mse_benchmark = np.mean((y - np.mean(y)) ** 2)
-        r2_oos = 1 - mse_model / mse_benchmark
-
-    return pd.Series(
-        {
-            # "rank_ic": x["Alpha"].corr(x["future_interest_change"], method="spearman"),
-            "n_obs": len(data),
-            "top_minus_bottom": top_minus_bottom,
-            "Alpha": data["Alpha"],
-            "R2": r2_oos,
-            "mse": mean_squared_error(data["actual_change"], data["pred_change"]),
-            "mae": mean_absolute_error(data["actual_change"], data["pred_change"]),
-            # "R2_lag": r2_lag,
-            # "mse_lag": mean_squared_error(data["actual_change_lag1"], data["pred_change"]),
-            # "mae_lag": mean_absolute_error(data["actual_change_lag1"], data["pred_change"]),
-        }
-    )
-
-
-# ---------------
-all_country_frame = pd.DataFrame(
-    columns=[
-        id_column_name,
-        "No. of data points",
-        "Country",
-        "Interest Rate Std Dev",
-        "Central bank Interest Rate Std Dev",
-        "Sensitvity",
-        "Correlation",
-        "Alpha",
-        "Alpha_US",
-    ]
-)
-
-agg_frame = pd.DataFrame(
-    columns=[
-        "No. of data points",
-        "Country",
-        "Interest Rate Std Dev",
-        "Central bank Interest Rate Std Dev",
-        "Sensitvity",
-        "Correlation",
-        "Alpha",
-        "Alpha_US",
-    ]
-)
-
-for country in interest_data.country_of_risk.unique():
-    # print("Country to be processed: ", country)
-    id_data = interest_expense(interest_data, MEVdata, country, sector=sector, aggregate=False)
-    agg_data = interest_expense(agg_interest_data, MEVdata, country, sector=sector, aggregate=True)
-    if len(id_data) > 0:
-        all_country_frame = pd.concat(
-            [all_country_frame, id_data], axis=0, ignore_index=True
+            std_df["Sensitvity"] = (
+                std_df["interest_rate"]
+                / std_df[f"{country}_Monetary policy or key interest rate_4QMA"]
+            )
+            std_df["Sensitvity_US"] = (
+                std_df["interest_rate"]
+                / std_df["Monetary policy or key interest rate_4QMA_US"]
+            )
+        else:
+            data["No. of data points"] = len(data["DATE_OF_FINANCIALS"])
+            std_df = data.agg(
+                {
+                    "No. of data points": "count",
+                    "country_of_risk": lambda x: x.iloc[0],
+                    "interest_rate": "std",
+                    f"{country}_Monetary policy or key interest rate_4QMA": "std",
+                    "Monetary policy or key interest rate_4QMA_US": "std",
+                    "irb_ead": lambda x: x.iloc[0],
+                }
+            )
+            std_df["Sensitvity"] = (
+                std_df["interest_rate"]
+                / std_df[f"{country}_Monetary policy or key interest rate_4QMA"]
+            )
+            std_df["Sensitvity_US"] = (
+                std_df["interest_rate"]
+                / std_df["Monetary policy or key interest rate_4QMA_US"]
+            )
+            std_df = std_df.to_dict()
+    
+        if not aggregate:
+            correlation_per_id = data.groupby(id_column_name).apply(
+                lambda x: x["interest_rate"].corr(
+                    x[f"{country}_Monetary policy or key interest rate_4QMA"]
+                )
+            )
+    
+            correlation_per_id_US = data.groupby(id_column_name).apply(
+                lambda x: x["interest_rate"].corr(
+                    x[f"Monetary policy or key interest rate_4QMA_US"]
+                )
+            )
+    
+            correlation_df = correlation_per_id.rename("Correlation").reset_index()
+            correlation_df_US = correlation_per_id_US.rename("Correlation_US").reset_index()
+            all_df = pd.merge(std_df, correlation_df, on=id_column_name)
+            all_df = pd.merge(all_df, correlation_df_US, on=id_column_name)
+            all_df["Alpha"] = (all_df["Correlation"] * all_df["Sensitvity"]).clip(
+                lower=alpha_min, upper=alpha_max
+            )
+            all_df["Alpha_US"] = (
+                all_df["Correlation_US"] * all_df["Sensitvity_US"]
+            ).clip(lower=alpha_min, upper=alpha_max)
+        else:
+            correlation_agg = data["interest_rate"].corr(
+                data[f"{country}_Monetary policy or key interest rate_4QMA"]
+            )
+            correlation_agg_US = data["interest_rate"].corr(
+                data[f"Monetary policy or key interest rate_4QMA_US"]
+            )
+    
+            std_df["Correlation"] = correlation_agg
+            std_df["Correlation_US"] = correlation_agg_US
+    
+            all_df = pd.DataFrame([std_df])
+            all_df["Alpha"] = (all_df["Correlation"] * all_df["Sensitvity"]).clip(
+                lower=alpha_min, upper=alpha_max
+            )
+            all_df["Alpha_US"] = (
+                all_df["Correlation_US"] * all_df["Sensitvity_US"]
+            ).clip(lower=alpha_min, upper=alpha_max)
+    
+        all_df = all_df.rename(
+            columns={
+                "country_of_risk": "Country",
+                "interest_rate": "Interest Rate Std Dev",
+                f"{country}_Monetary policy or key interest rate_4QMA": "Central bank Interest Rate Std Dev",
+            }
         )
-    if len(agg_data) > 0:
-        agg_frame = pd.concat(
-            [agg_frame, agg_data], axis=0, ignore_index=True
+    
+        return all_df
+    
+    
+    def compute_alpha(window_df, country):
+        corr = window_df["interest_rate"].corr(
+            window_df[f"{country}_Monetary policy or key interest rate_4QMA"]
         )
-
-# -------
-all_portfolio_frame = all_country_frame.copy()
-all_portfolio_frame["Portfolio"] = all_portfolio_frame["Portfolio"].replace(
-    {
-        "LC": "LC_CC",
-        "CC": "LC_CC",
-    }
-)
-
-if not isWeighted:
-    # unweighted
-    country_level_df = all_country_frame.groupby("Country").agg(
-        {
-            "Alpha": "mean",
-            "Alpha_US": "mean",
-        }
-    )
-
-    ## group by portfolio
-    portfolio_level_df = all_portfolio_frame.groupby("Portfolio").agg(
-        {
-            "Alpha": "mean",
-            "Alpha_US": "mean",
-        }
-    )
-
-    both_level_df = all_portfolio_frame.groupby(["Portfolio", "Country"]).agg(
-        {
-            "Alpha": "mean",
-            "Alpha_US": "mean",
-        }
-    )
-
-else:
-    # weighted
-    country_level_df = all_country_frame.groupby("Country").agg(
-        {
-            "Alpha": lambda x: (
-                (x * all_country_frame.loc[x.index, "irb_ead"]).sum()
-                / all_country_frame.loc[x.index, "irb_ead"].sum()
-            ),
-            "Alpha_US": lambda x: (
-                (x * all_country_frame.loc[x.index, "irb_ead"]).sum()
-                / all_country_frame.loc[x.index, "irb_ead"].sum()
-            ),
-        }
-    )
-
-    ## group by portfolio
-    portfolio_level_df = all_portfolio_frame.groupby("Portfolio").agg(
-        {
-            "Alpha": lambda x: (
-                (x * all_portfolio_frame.loc[x.index, "irb_ead"]).sum()
-                / all_portfolio_frame.loc[x.index, "irb_ead"].sum()
-            ),
-            "Alpha_US": lambda x: (
-                (x * all_portfolio_frame.loc[x.index, "irb_ead"]).sum()
-                / all_portfolio_frame.loc[x.index, "irb_ead"].sum()
-            ),
-        }
-    )
-
-    both_level_df = all_portfolio_frame.groupby(["Portfolio", "Country"]).agg(
-        {
-            "Alpha": lambda x: (
-                (x * all_portfolio_frame.loc[x.index, "irb_ead"]).sum()
-                / all_portfolio_frame.loc[x.index, "irb_ead"].sum()
-            ),
-            "Alpha_US": lambda x: (
-                (x * all_portfolio_frame.loc[x.index, "irb_ead"]).sum()
-                / all_portfolio_frame.loc[x.index, "irb_ead"].sum()
-            ),
-        }
-    )
-
-# ----------
-ead_sum = all_country_frame.groupby("Country").agg({"irb_ead": "sum"})
-country_level_df = country_level_df.merge(ead_sum, how="left", on="Country")
-country_level_df["Country"] = country_level_df.index
-
-portfolio_ead_sum = all_portfolio_frame.groupby("Portfolio").agg({"irb_ead": "sum"})
-portfolio_level_df = portfolio_level_df.merge(portfolio_ead_sum, how="left", on="Portfolio")
-portfolio_level_df["Portfolio"] = portfolio_level_df.index
-
-all_ead_sum = all_portfolio_frame.groupby(["Portfolio", "Country"]).agg({"irb_ead": "sum"})
-both_level_df = both_level_df.merge(all_ead_sum, how="left", on=["Portfolio", "Country"])
-both_level_df = both_level_df.reset_index()
-
-if globalmodel:
-    # handle global model
-    regional_country_list = []
-    global_final = pd.DataFrame(columns=country_level_df.columns)
-    for (
-        key,
-        values,
-    ) in (
-        country_group_mapping.items()
-    ):  # key refers to region, values refers to countries
-        regional_country_list = list(set(regional_country_list + values))
-        country_level_df2 = country_level_df.loc[
-            country_level_df.index.isin(values)
+        sensitivity = (
+            window_df["interest_rate"].std()
+            / window_df[f"{country}_Monetary policy or key interest rate_4QMA"].std()
+        )
+        alpha = corr * sensitivity
+        return np.clip(alpha, alpha_min, alpha_max)
+    
+    
+    # ----------
+    def interest_expense(interest_data, MEVdata, country, sector, aggregate):
+        data = process_data_country_sector(interest_data, MEVdata, country, sector, aggregate)
+        if len(data) == 0:
+            final = pd.DataFrame()
+        else:
+            final = get_corr_df(data, country, aggregate)
+    
+            ## Add portfolio column
+            if not aggregate:
+                final = final.merge(
+                    interest_data[["spread_id", "Portfolio"]],
+                    on="spread_id",
+                    how="left",
+                )
+        return final
+    
+    
+    def cal_country_stats_with_r2(data):
+        buckets = pd.qcut(data["pred_change"], 5, duplicates="drop")
+        bucket_perf = data.groupby(buckets)["actual_change"].mean()
+    
+        if len(bucket_perf) < 2:
+            top_minus_bottom = np.nan
+        else:
+            top_minus_bottom = bucket_perf.iloc[-1] - bucket_perf.iloc[0]
+    
+            ## OLS
+            X = sm.add_constant(data["pred_change"])
+            y = data["actual_change"]
+            model = sm.OLS(y, X, missing="drop").fit()
+            y_pred = model.predict(X)
+    
+            mse_model = np.mean((y - y_pred) ** 2)
+            mse_benchmark = np.mean((y - np.mean(y)) ** 2)
+            r2_oos = 1 - mse_model / mse_benchmark
+    
+        return pd.Series(
+            {
+                # "rank_ic": x["Alpha"].corr(x["future_interest_change"], method="spearman"),
+                "n_obs": len(data),
+                "top_minus_bottom": top_minus_bottom,
+                "Alpha": data["Alpha"],
+                "R2": r2_oos,
+                "mse": mean_squared_error(data["actual_change"], data["pred_change"]),
+                "mae": mean_absolute_error(data["actual_change"], data["pred_change"]),
+                # "R2_lag": r2_lag,
+                # "mse_lag": mean_squared_error(data["actual_change_lag1"], data["pred_change"]),
+                # "mae_lag": mean_absolute_error(data["actual_change_lag1"], data["pred_change"]),
+            }
+        )
+    
+    
+    # ---------------
+    all_country_frame = pd.DataFrame(
+        columns=[
+            id_column_name,
+            "No. of data points",
+            "Country",
+            "Interest Rate Std Dev",
+            "Central bank Interest Rate Std Dev",
+            "Sensitvity",
+            "Correlation",
+            "Alpha",
+            "Alpha_US",
         ]
-
+    )
+    
+    agg_frame = pd.DataFrame(
+        columns=[
+            "No. of data points",
+            "Country",
+            "Interest Rate Std Dev",
+            "Central bank Interest Rate Std Dev",
+            "Sensitvity",
+            "Correlation",
+            "Alpha",
+            "Alpha_US",
+        ]
+    )
+    
+    for country in interest_data.country_of_risk.unique():
+        # print("Country to be processed: ", country)
+        id_data = interest_expense(interest_data, MEVdata, country, sector=sector, aggregate=False)
+        agg_data = interest_expense(agg_interest_data, MEVdata, country, sector=sector, aggregate=True)
+        if len(id_data) > 0:
+            all_country_frame = pd.concat(
+                [all_country_frame, id_data], axis=0, ignore_index=True
+            )
+        if len(agg_data) > 0:
+            agg_frame = pd.concat(
+                [agg_frame, agg_data], axis=0, ignore_index=True
+            )
+    
+    # -------
+    all_portfolio_frame = all_country_frame.copy()
+    all_portfolio_frame["Portfolio"] = all_portfolio_frame["Portfolio"].replace(
+        {
+            "LC": "LC_CC",
+            "CC": "LC_CC",
+        }
+    )
+    
+    if not isWeighted:
+        # unweighted
+        country_level_df = all_country_frame.groupby("Country").agg(
+            {
+                "Alpha": "mean",
+                "Alpha_US": "mean",
+            }
+        )
+    
+        ## group by portfolio
+        portfolio_level_df = all_portfolio_frame.groupby("Portfolio").agg(
+            {
+                "Alpha": "mean",
+                "Alpha_US": "mean",
+            }
+        )
+    
+        both_level_df = all_portfolio_frame.groupby(["Portfolio", "Country"]).agg(
+            {
+                "Alpha": "mean",
+                "Alpha_US": "mean",
+            }
+        )
+    
+    else:
+        # weighted
+        country_level_df = all_country_frame.groupby("Country").agg(
+            {
+                "Alpha": lambda x: (
+                    (x * all_country_frame.loc[x.index, "irb_ead"]).sum()
+                    / all_country_frame.loc[x.index, "irb_ead"].sum()
+                ),
+                "Alpha_US": lambda x: (
+                    (x * all_country_frame.loc[x.index, "irb_ead"]).sum()
+                    / all_country_frame.loc[x.index, "irb_ead"].sum()
+                ),
+            }
+        )
+    
+        ## group by portfolio
+        portfolio_level_df = all_portfolio_frame.groupby("Portfolio").agg(
+            {
+                "Alpha": lambda x: (
+                    (x * all_portfolio_frame.loc[x.index, "irb_ead"]).sum()
+                    / all_portfolio_frame.loc[x.index, "irb_ead"].sum()
+                ),
+                "Alpha_US": lambda x: (
+                    (x * all_portfolio_frame.loc[x.index, "irb_ead"]).sum()
+                    / all_portfolio_frame.loc[x.index, "irb_ead"].sum()
+                ),
+            }
+        )
+    
+        both_level_df = all_portfolio_frame.groupby(["Portfolio", "Country"]).agg(
+            {
+                "Alpha": lambda x: (
+                    (x * all_portfolio_frame.loc[x.index, "irb_ead"]).sum()
+                    / all_portfolio_frame.loc[x.index, "irb_ead"].sum()
+                ),
+                "Alpha_US": lambda x: (
+                    (x * all_portfolio_frame.loc[x.index, "irb_ead"]).sum()
+                    / all_portfolio_frame.loc[x.index, "irb_ead"].sum()
+                ),
+            }
+        )
+    
+    # ----------
+    ead_sum = all_country_frame.groupby("Country").agg({"irb_ead": "sum"})
+    country_level_df = country_level_df.merge(ead_sum, how="left", on="Country")
+    country_level_df["Country"] = country_level_df.index
+    
+    portfolio_ead_sum = all_portfolio_frame.groupby("Portfolio").agg({"irb_ead": "sum"})
+    portfolio_level_df = portfolio_level_df.merge(portfolio_ead_sum, how="left", on="Portfolio")
+    portfolio_level_df["Portfolio"] = portfolio_level_df.index
+    
+    all_ead_sum = all_portfolio_frame.groupby(["Portfolio", "Country"]).agg({"irb_ead": "sum"})
+    both_level_df = both_level_df.merge(all_ead_sum, how="left", on=["Portfolio", "Country"])
+    both_level_df = both_level_df.reset_index()
+    
+    if globalmodel:
+        # handle global model
+        regional_country_list = []
+        global_final = pd.DataFrame(columns=country_level_df.columns)
+        for (
+            key,
+            values,
+        ) in (
+            country_group_mapping.items()
+        ):  # key refers to region, values refers to countries
+            regional_country_list = list(set(regional_country_list + values))
+            country_level_df2 = country_level_df.loc[
+                country_level_df.index.isin(values)
+            ]
+    
+            country_level_df2["Alpha"] = np.where(
+                country_level_df2["Alpha"] == 0.0,
+                country_level_df2["Alpha_US"],
+                country_level_df2["Alpha"],
+            )
+    
+            globals()[f"{key}_dict"] = {}
+            globals()[f"{key}_dict"]["Alpha"] = sum(
+                country_level_df2["Alpha"]
+                * country_level_df2["irb_ead"]
+                / country_level_df2["irb_ead"].sum()
+            )
+    
+            globals()[f"{key}_dict"]["Alpha_US"] = sum(
+                country_level_df2["Alpha_US"]
+                * country_level_df2["irb_ead"]
+                / country_level_df2["irb_ead"].sum()
+            )
+    
+            globals()[f"{key}_dict"]["irb_ead"] = country_level_df2["irb_ead"].sum()
+            global_final.loc[key] = globals()[f"{key}_dict"]
+    
+        country_list_global = country_level_df.Country.unique()
+        others_list_global = [
+            i for i in country_list_global if i not in regional_country_list
+        ]
+    
+        country_level_df2 = country_level_df.loc[
+            country_level_df.index.isin(others_list_global)
+        ]
+    
         country_level_df2["Alpha"] = np.where(
             country_level_df2["Alpha"] == 0.0,
             country_level_df2["Alpha_US"],
             country_level_df2["Alpha"],
         )
-
-        globals()[f"{key}_dict"] = {}
-        globals()[f"{key}_dict"]["Alpha"] = sum(
+    
+        other_dict = {}
+        other_dict["Alpha"] = sum(
             country_level_df2["Alpha"]
             * country_level_df2["irb_ead"]
             / country_level_df2["irb_ead"].sum()
         )
-
-        globals()[f"{key}_dict"]["Alpha_US"] = sum(
+    
+        other_dict["Alpha_US"] = sum(
             country_level_df2["Alpha_US"]
             * country_level_df2["irb_ead"]
             / country_level_df2["irb_ead"].sum()
         )
-
-        globals()[f"{key}_dict"]["irb_ead"] = country_level_df2["irb_ead"].sum()
-        global_final.loc[key] = globals()[f"{key}_dict"]
-
-    country_list_global = country_level_df.Country.unique()
-    others_list_global = [
-        i for i in country_list_global if i not in regional_country_list
+    
+        other_dict["irb_ead"] = country_level_df2["irb_ead"].sum()
+        country_level_df = global_final[["Alpha", "Alpha_US"]]
+    
+    else:
+        # handle for "Others"
+        country_level_df1 = country_level_df.loc[
+            country_level_df.index.isin(top_countries)
+        ]
+    
+        country_level_df2 = country_level_df.loc[
+            ~country_level_df.index.isin(top_countries)
+        ]
+    
+        country_level_df2["Alpha"] = np.where(
+            country_level_df2["Alpha"] == 0.0,
+            country_level_df2["Alpha_US"],
+            country_level_df2["Alpha"],
+        )
+    
+        other_dict = {}
+        other_dict["Alpha"] = sum(
+            country_level_df2["Alpha"]
+            * country_level_df2["irb_ead"]
+            / country_level_df2["irb_ead"].sum()
+        )
+    
+        other_dict["Alpha_US"] = sum(
+            country_level_df2["Alpha_US"]
+            * country_level_df2["irb_ead"]
+            / country_level_df2["irb_ead"].sum()
+        )
+    
+        other_dict["irb_ead"] = country_level_df2["irb_ead"].sum()
+        country_level_df1.loc["Others"] = other_dict
+        country_level_df = country_level_df1[["Alpha", "Alpha_US"]]
+    
+    # ----------
+    plt.figure(figsize=(8, 6))
+    plt.bar(country_level_df.index, 100 * country_level_df.Alpha)
+    plt.title(f"Country level Alpha", fontsize=16)
+    plt.xlabel("Country", fontsize=14)
+    plt.ylabel(f"Alpha (%)", fontsize=14)
+    plt.grid(True)
+    # plt.show()
+    
+    plt.figure(figsize=(8, 6))
+    plt.bar(country_level_df.index, 100 * country_level_df.Alpha_US)
+    plt.title(f"Country level Alpha with US rate", fontsize=16)
+    plt.xlabel("Country", fontsize=14)
+    plt.ylabel(f"Alpha (%)", fontsize=14)
+    plt.grid(True)
+    # plt.show()
+    
+    # -----------
+    ## Summarize and export to files
+    country_level_df.loc["All countries average"] = [
+        country_level_df.Alpha.mean(),
+        country_level_df.Alpha_US.mean(),
     ]
-
-    country_level_df2 = country_level_df.loc[
-        country_level_df.index.isin(others_list_global)
+    
+    current_date = datetime.now().strftime("%Y-%m-%d")
+    
+    # leid_output = all_country_frame[["Country", id_column_name, "Alpha", "Alpha_US"]]
+    leid_output = all_country_frame[["Country", "Portfolio", id_column_name, "Alpha", "Alpha_US"]]
+    leid_output["Driver"] = "Interest Expense Driver"
+    leid_output["Sector"] = sector
+    leid_output["Sub-sector"] = "All"
+    leid_output["As of Date"] = current_date
+    
+    leid_output = leid_output.rename(
+        columns={id_column_name: "LEID", "Alpha": "Alpha_LCY"}
+    )
+    
+    leid_output["Alpha"] = leid_output.apply(
+        lambda row: (
+            row["Alpha_US"]
+            if pd.isna(row["Alpha_LCY"]) or row["Alpha_LCY"] == ""
+            else row["Alpha_LCY"]
+        ),
+        axis=1,
+    )
+    
+    leid_output["Alpha Base"] = leid_output.apply(
+        lambda row: (
+            "FCY (USD)"
+            if pd.isna(row["Alpha_LCY"]) or row["Alpha_LCY"] == ""
+            else "LCY"
+        ),
+        axis=1,
+    )
+    
+    leid_output = leid_output.drop(columns=["Alpha_LCY", "Alpha_US"])
+    
+    new_order = [
+        "Driver",
+        "Sector",
+        "Sub-sector",
+        "Country",
+        "Portfolio",
+        "LEID",
+        "Alpha Base",
+        "Alpha",
+        "As of Date",
     ]
-
-    country_level_df2["Alpha"] = np.where(
-        country_level_df2["Alpha"] == 0.0,
-        country_level_df2["Alpha_US"],
-        country_level_df2["Alpha"],
+    leid_output = leid_output[new_order]
+    
+    # ----------
+    country_output = country_level_df.copy()
+    if globalmodel:
+        country_output["Country"] = country_output.index
+    
+    country_output.reset_index(inplace=True)
+    summary_testing = country_output.copy()
+    
+    country_output = pd.melt(
+        country_output,
+        id_vars=["Country"],
+        value_vars=["Alpha", "Alpha_US"],
+        var_name="Type",
+        value_name="Value",
     )
-
-    other_dict = {}
-    other_dict["Alpha"] = sum(
-        country_level_df2["Alpha"]
-        * country_level_df2["irb_ead"]
-        / country_level_df2["irb_ead"].sum()
+    
+    country_output["Alpha Base"] = country_output.apply(
+        lambda row: "FCY (USD)" if row["Type"] == "Alpha_US" else "LCY", axis=1
     )
-
-    other_dict["Alpha_US"] = sum(
-        country_level_df2["Alpha_US"]
-        * country_level_df2["irb_ead"]
-        / country_level_df2["irb_ead"].sum()
-    )
-
-    other_dict["irb_ead"] = country_level_df2["irb_ead"].sum()
-    country_level_df = global_final[["Alpha", "Alpha_US"]]
-
-else:
-    # handle for "Others"
-    country_level_df1 = country_level_df.loc[
-        country_level_df.index.isin(top_countries)
+    country_output["Driver"] = "Interest Expense Driver"
+    country_output["Sector"] = sector
+    country_output["Sub-sector"] = "All"
+    
+    country_output["As of Date"] = current_date
+    
+    country_output = country_output.rename(columns={"Value": "Alpha"})
+    
+    new_order = [
+        "Driver",
+        "Sector",
+        "Sub-sector",
+        "Country",
+        "Alpha Base",
+        "Alpha",
+        "As of Date",
     ]
-
-    country_level_df2 = country_level_df.loc[
-        ~country_level_df.index.isin(top_countries)
+    
+    country_output = country_output[new_order]
+    
+    # ----------
+    portfolio_output = portfolio_level_df.copy()
+    # portfolio_output.reset_index(inplace=True)
+    portfolio_output = pd.melt(
+        portfolio_output,
+        id_vars=["Portfolio"],
+        value_vars=["Alpha", "Alpha_US"],
+        var_name="Type",
+        value_name="Value",
+    )
+    portfolio_output["Alpha Base"] = portfolio_output.apply(
+        lambda row: "FCY (USD)" if row["Type"] == "Alpha_US" else "LCY", axis=1
+    )
+    
+    portfolio_output["Driver"] = "Interest Expense Driver"
+    portfolio_output["Sector"] = sector
+    portfolio_output["Sub-sector"] = "All"
+    
+    portfolio_output["As of Date"] = current_date
+    
+    portfolio_output = portfolio_output.rename(columns={"Value": "Alpha"})
+    
+    new_order = [
+        "Driver",
+        "Sector",
+        "Sub-sector",
+        "Portfolio",
+        "Alpha Base",
+        "Alpha",
+        "As of Date",
     ]
-
-    country_level_df2["Alpha"] = np.where(
-        country_level_df2["Alpha"] == 0.0,
-        country_level_df2["Alpha_US"],
-        country_level_df2["Alpha"],
+    
+    portfolio_output = portfolio_output[new_order]
+    
+    
+    ## prepare for aggregate split
+    def agg_results(input_data):
+        data = input_data.copy()
+        data = data.dropna()
+        df1 = data.loc[data["Country"].isin(top_countries)]
+        df2 = data.loc[~data["Country"].isin(top_countries)]
+        df2["Alpha"] = np.where(
+            df2["Alpha"] == 0.0,
+            df2["Alpha_US"],
+            df2["Alpha"],
+        )
+    
+        other_alpha = sum(
+            df2["Alpha"]
+            * df2["irb_ead"]
+            / df2["irb_ead"].sum()
+        )
+    
+        other_alpha_us = sum(
+            df2["Alpha_US"]
+            * df2["irb_ead"]
+            / df2["irb_ead"].sum()
+        )
+    
+        other_ead = df2["irb_ead"].sum()
+        other_df = pd.DataFrame(
+            [{
+                "Country": "Others",
+                "Alpha": other_alpha,
+                "Alpha_US": other_alpha_us,
+                "irb_ead": other_ead,
+            }]
+        )
+        df1 = pd.concat([df1, other_df], ignore_index=True)
+        output = df1[["Country", "Alpha", "Alpha_US"]]
+    
+        all_ave_alpha = output.Alpha.mean()
+        all_ave_alpha_us = output.Alpha_US.mean()
+        all_ave_df = pd.DataFrame(
+            [{
+                "Country": "All countries average",
+                "Alpha": all_ave_alpha,
+                "Alpha_US": all_ave_alpha_us,
+            }]
+        )
+        output = pd.concat([output, all_ave_df], ignore_index=True)
+        return output
+    
+    
+    # LC_CC, HC split with country level ----------
+    def split_portfolio(data, portfolio):
+        output = both_level_df[both_level_df["Portfolio"] == portfolio]
+        df1 = output.loc[data["Country"].isin(top_countries)]
+        df2 = output.loc[~data["Country"].isin(top_countries)]
+        df2["Alpha"] = np.where(
+            df2["Alpha"] == 0.0,
+            df2["Alpha_US"],
+            df2["Alpha"],
+        )
+    
+        other_alpha = sum(
+            df2["Alpha"]
+            * df2["irb_ead"]
+            / df2["irb_ead"].sum()
+        )
+    
+        other_alpha_us = sum(
+            df2["Alpha_US"]
+            * df2["irb_ead"]
+            / df2["irb_ead"].sum()
+        )
+    
+        other_ead = df2["irb_ead"].sum()
+        other_df = pd.DataFrame(
+            [{
+                "Portfolio": portfolio,
+                "Country": "Others",
+                "Alpha": other_alpha,
+                "Alpha_US": other_alpha_us,
+                "irb_ead": other_ead,
+            }]
+        )
+        df1 = pd.concat([df1, other_df], ignore_index=True)
+        output = df1[["Portfolio", "Country", "Alpha", "Alpha_US"]]
+    
+        all_ave_alpha = output.Alpha.mean()
+        all_ave_alpha_us = output.Alpha_US.mean()
+        all_ave_df = pd.DataFrame(
+            [{
+                "Portfolio": portfolio,
+                "Country": "All countries average",
+                "Alpha": all_ave_alpha,
+                "Alpha_US": all_ave_alpha_us,
+            }]
+        )
+        output = pd.concat([output, all_ave_df], ignore_index=True)
+        return output
+    
+    
+    agg_output = agg_results(agg_frame)
+    LC_CC_split_output = split_portfolio(both_level_df, "LC_CC")
+    MC_split_output = split_portfolio(both_level_df, "HC")
+    
+    agg_output = pd.melt(
+        agg_output,
+        id_vars=["Country"],
+        value_vars=["Alpha", "Alpha_US"],
+        var_name="Type",
+        value_name="Value",
     )
-
-    other_dict = {}
-    other_dict["Alpha"] = sum(
-        country_level_df2["Alpha"]
-        * country_level_df2["irb_ead"]
-        / country_level_df2["irb_ead"].sum()
+    
+    agg_output["Alpha Base"] = agg_output.apply(
+        lambda row: "FCY (USD)" if row["Type"] == "Alpha_US" else "LCY", axis=1
     )
-
-    other_dict["Alpha_US"] = sum(
-        country_level_df2["Alpha_US"]
-        * country_level_df2["irb_ead"]
-        / country_level_df2["irb_ead"].sum()
+    
+    agg_output["Driver"] = "Interest Expense Driver"
+    agg_output["Sector"] = sector
+    agg_output["Sub-sector"] = "All"
+    agg_output["As of Date"] = current_date
+    agg_output = agg_output.rename(columns={"Value": "Alpha"})
+    
+    LC_CC_split_output = pd.melt(
+        LC_CC_split_output,
+        id_vars=["Country"],
+        value_vars=["Alpha", "Alpha_US"],
+        var_name="Type",
+        value_name="Value",
     )
-
-    other_dict["irb_ead"] = country_level_df2["irb_ead"].sum()
-    country_level_df1.loc["Others"] = other_dict
-    country_level_df = country_level_df1[["Alpha", "Alpha_US"]]
-
-# ----------
-plt.figure(figsize=(8, 6))
-plt.bar(country_level_df.index, 100 * country_level_df.Alpha)
-plt.title(f"Country level Alpha", fontsize=16)
-plt.xlabel("Country", fontsize=14)
-plt.ylabel(f"Alpha (%)", fontsize=14)
-plt.grid(True)
-# plt.show()
-
-plt.figure(figsize=(8, 6))
-plt.bar(country_level_df.index, 100 * country_level_df.Alpha_US)
-plt.title(f"Country level Alpha with US rate", fontsize=16)
-plt.xlabel("Country", fontsize=14)
-plt.ylabel(f"Alpha (%)", fontsize=14)
-plt.grid(True)
-# plt.show()
-
-# -----------
-## Summarize and export to files
-country_level_df.loc["All countries average"] = [
-    country_level_df.Alpha.mean(),
-    country_level_df.Alpha_US.mean(),
-]
-
-current_date = datetime.now().strftime("%Y-%m-%d")
-
-# leid_output = all_country_frame[["Country", id_column_name, "Alpha", "Alpha_US"]]
-leid_output = all_country_frame[["Country", "Portfolio", id_column_name, "Alpha", "Alpha_US"]]
-leid_output["Driver"] = "Interest Expense Driver"
-leid_output["Sector"] = sector
-leid_output["Sub-sector"] = "All"
-leid_output["As of Date"] = current_date
-
-leid_output = leid_output.rename(
-    columns={id_column_name: "LEID", "Alpha": "Alpha_LCY"}
-)
-
-leid_output["Alpha"] = leid_output.apply(
-    lambda row: (
-        row["Alpha_US"]
-        if pd.isna(row["Alpha_LCY"]) or row["Alpha_LCY"] == ""
-        else row["Alpha_LCY"]
-    ),
-    axis=1,
-)
-
-leid_output["Alpha Base"] = leid_output.apply(
-    lambda row: (
-        "FCY (USD)"
-        if pd.isna(row["Alpha_LCY"]) or row["Alpha_LCY"] == ""
-        else "LCY"
-    ),
-    axis=1,
-)
-
-leid_output = leid_output.drop(columns=["Alpha_LCY", "Alpha_US"])
-
-new_order = [
-    "Driver",
-    "Sector",
-    "Sub-sector",
-    "Country",
-    "Portfolio",
-    "LEID",
-    "Alpha Base",
-    "Alpha",
-    "As of Date",
-]
-leid_output = leid_output[new_order]
-
-# ----------
-country_output = country_level_df.copy()
-if globalmodel:
-    country_output["Country"] = country_output.index
-
-country_output.reset_index(inplace=True)
-summary_testing = country_output.copy()
-
-country_output = pd.melt(
-    country_output,
-    id_vars=["Country"],
-    value_vars=["Alpha", "Alpha_US"],
-    var_name="Type",
-    value_name="Value",
-)
-
-country_output["Alpha Base"] = country_output.apply(
-    lambda row: "FCY (USD)" if row["Type"] == "Alpha_US" else "LCY", axis=1
-)
-country_output["Driver"] = "Interest Expense Driver"
-country_output["Sector"] = sector
-country_output["Sub-sector"] = "All"
-
-country_output["As of Date"] = current_date
-
-country_output = country_output.rename(columns={"Value": "Alpha"})
-
-new_order = [
-    "Driver",
-    "Sector",
-    "Sub-sector",
-    "Country",
-    "Alpha Base",
-    "Alpha",
-    "As of Date",
-]
-
-country_output = country_output[new_order]
-
-# ----------
-portfolio_output = portfolio_level_df.copy()
-# portfolio_output.reset_index(inplace=True)
-portfolio_output = pd.melt(
-    portfolio_output,
-    id_vars=["Portfolio"],
-    value_vars=["Alpha", "Alpha_US"],
-    var_name="Type",
-    value_name="Value",
-)
-portfolio_output["Alpha Base"] = portfolio_output.apply(
-    lambda row: "FCY (USD)" if row["Type"] == "Alpha_US" else "LCY", axis=1
-)
-
-portfolio_output["Driver"] = "Interest Expense Driver"
-portfolio_output["Sector"] = sector
-portfolio_output["Sub-sector"] = "All"
-
-portfolio_output["As of Date"] = current_date
-
-portfolio_output = portfolio_output.rename(columns={"Value": "Alpha"})
-
-new_order = [
-    "Driver",
-    "Sector",
-    "Sub-sector",
-    "Portfolio",
-    "Alpha Base",
-    "Alpha",
-    "As of Date",
-]
-
-portfolio_output = portfolio_output[new_order]
-
-
-## prepare for aggregate split
-def agg_results(input_data):
-    data = input_data.copy()
-    data = data.dropna()
-    df1 = data.loc[data["Country"].isin(top_countries)]
-    df2 = data.loc[~data["Country"].isin(top_countries)]
-    df2["Alpha"] = np.where(
-        df2["Alpha"] == 0.0,
-        df2["Alpha_US"],
-        df2["Alpha"],
+    
+    MC_split_output = pd.melt(
+        MC_split_output,
+        id_vars=["Country"],
+        value_vars=["Alpha", "Alpha_US"],
+        var_name="Type",
+        value_name="Value",
     )
-
-    other_alpha = sum(
-        df2["Alpha"]
-        * df2["irb_ead"]
-        / df2["irb_ead"].sum()
+    
+    LC_CC_split_output["Alpha Base"] = LC_CC_split_output.apply(
+        lambda row: "FCY (USD)" if row["Type"] == "Alpha_US" else "LCY", axis=1
     )
-
-    other_alpha_us = sum(
-        df2["Alpha_US"]
-        * df2["irb_ead"]
-        / df2["irb_ead"].sum()
+    
+    MC_split_output["Alpha Base"] = MC_split_output.apply(
+        lambda row: "FCY (USD)" if row["Type"] == "Alpha_US" else "LCY", axis=1
     )
-
-    other_ead = df2["irb_ead"].sum()
-    other_df = pd.DataFrame(
-        [{
-            "Country": "Others",
-            "Alpha": other_alpha,
-            "Alpha_US": other_alpha_us,
-            "irb_ead": other_ead,
-        }]
-    )
-    df1 = pd.concat([df1, other_df], ignore_index=True)
-    output = df1[["Country", "Alpha", "Alpha_US"]]
-
-    all_ave_alpha = output.Alpha.mean()
-    all_ave_alpha_us = output.Alpha_US.mean()
-    all_ave_df = pd.DataFrame(
-        [{
-            "Country": "All countries average",
-            "Alpha": all_ave_alpha,
-            "Alpha_US": all_ave_alpha_us,
-        }]
-    )
-    output = pd.concat([output, all_ave_df], ignore_index=True)
-    return output
-
-
-# LC_CC, HC split with country level ----------
-def split_portfolio(data, portfolio):
-    output = both_level_df[both_level_df["Portfolio"] == portfolio]
-    df1 = output.loc[data["Country"].isin(top_countries)]
-    df2 = output.loc[~data["Country"].isin(top_countries)]
-    df2["Alpha"] = np.where(
-        df2["Alpha"] == 0.0,
-        df2["Alpha_US"],
-        df2["Alpha"],
-    )
-
-    other_alpha = sum(
-        df2["Alpha"]
-        * df2["irb_ead"]
-        / df2["irb_ead"].sum()
-    )
-
-    other_alpha_us = sum(
-        df2["Alpha_US"]
-        * df2["irb_ead"]
-        / df2["irb_ead"].sum()
-    )
-
-    other_ead = df2["irb_ead"].sum()
-    other_df = pd.DataFrame(
-        [{
-            "Portfolio": portfolio,
-            "Country": "Others",
-            "Alpha": other_alpha,
-            "Alpha_US": other_alpha_us,
-            "irb_ead": other_ead,
-        }]
-    )
-    df1 = pd.concat([df1, other_df], ignore_index=True)
-    output = df1[["Portfolio", "Country", "Alpha", "Alpha_US"]]
-
-    all_ave_alpha = output.Alpha.mean()
-    all_ave_alpha_us = output.Alpha_US.mean()
-    all_ave_df = pd.DataFrame(
-        [{
-            "Portfolio": portfolio,
-            "Country": "All countries average",
-            "Alpha": all_ave_alpha,
-            "Alpha_US": all_ave_alpha_us,
-        }]
-    )
-    output = pd.concat([output, all_ave_df], ignore_index=True)
-    return output
-
-
-agg_output = agg_results(agg_frame)
-LC_CC_split_output = split_portfolio(both_level_df, "LC_CC")
-MC_split_output = split_portfolio(both_level_df, "HC")
-
-agg_output = pd.melt(
-    agg_output,
-    id_vars=["Country"],
-    value_vars=["Alpha", "Alpha_US"],
-    var_name="Type",
-    value_name="Value",
-)
-
-agg_output["Alpha Base"] = agg_output.apply(
-    lambda row: "FCY (USD)" if row["Type"] == "Alpha_US" else "LCY", axis=1
-)
-
-agg_output["Driver"] = "Interest Expense Driver"
-agg_output["Sector"] = sector
-agg_output["Sub-sector"] = "All"
-agg_output["As of Date"] = current_date
-agg_output = agg_output.rename(columns={"Value": "Alpha"})
-
-LC_CC_split_output = pd.melt(
-    LC_CC_split_output,
-    id_vars=["Country"],
-    value_vars=["Alpha", "Alpha_US"],
-    var_name="Type",
-    value_name="Value",
-)
-
-MC_split_output = pd.melt(
-    MC_split_output,
-    id_vars=["Country"],
-    value_vars=["Alpha", "Alpha_US"],
-    var_name="Type",
-    value_name="Value",
-)
-
-LC_CC_split_output["Alpha Base"] = LC_CC_split_output.apply(
-    lambda row: "FCY (USD)" if row["Type"] == "Alpha_US" else "LCY", axis=1
-)
-
-MC_split_output["Alpha Base"] = MC_split_output.apply(
-    lambda row: "FCY (USD)" if row["Type"] == "Alpha_US" else "LCY", axis=1
-)
-
-LC_CC_split_output["Driver"] = "Interest Expense Driver"
-LC_CC_split_output["Sector"] = sector
-LC_CC_split_output["Sub-sector"] = "All"
-LC_CC_split_output["As of Date"] = current_date
-LC_CC_split_output = LC_CC_split_output.rename(columns={"Value": "Alpha"})
-
-MC_split_output["Driver"] = "Interest Expense Driver"
-MC_split_output["Sector"] = sector
-MC_split_output["Sub-sector"] = "All"
-MC_split_output["As of Date"] = current_date
-MC_split_output = MC_split_output.rename(columns={"Value": "Alpha"})
-
-new_order = [
-    "Driver",
-    "Sector",
-    "Sub-sector",
-    "Country",
-    "Alpha Base",
-    "Alpha",
-    "As of Date",
-]
-agg_output = agg_output[new_order]
-LC_CC_split_output = LC_CC_split_output[new_order]
-MC_split_output = MC_split_output[new_order]
-
-
-## backtesting -------------------------------------------------------------------
-## Apply rolling window to calculate alpha ----------
-WINDOW = 3
-results = []
-id_bt_rows = []
-agg_bt_rows = []
-summary_bt_rows = []
-for country in interest_data.country_of_risk.unique():
-    agg_data = process_data_country_sector(
-        agg_interest_data, MEVdata, country, sector, aggregate=True
-    )
-    id_data = process_data_country_sector(
-        interest_data, MEVdata, country, sector, aggregate=False
-    )
-
-    ## for leid level back testing
-    id_data = id_data.sort_values(["spread_id", "DATE_OF_FINANCIALS"])
-    id_data["future_interest_change"] = (
-        id_data.groupby("spread_id")["interest_rate"].shift(-1)
-        - id_data["interest_rate"]
-    )
-    id_data["MEV_diff"] = (
-        id_data.groupby("spread_id")[
-            f"{country}_Monetary policy or key interest rate_4QMA"
-        ].shift(-1)
-        - id_data[f"{country}_Monetary policy or key interest rate_4QMA"]
-    )
-
-    ## for aggregation backtesting
-    agg_data = agg_data.sort_values(["DATE_OF_FINANCIALS"])
-    agg_data["future_interest_change"] = (
-        agg_data["interest_rate"].shift(-1) - agg_data["interest_rate"]
-    )
-    agg_data["MEV_diff"] = (
-        agg_data[f"{country}_Monetary policy or key interest rate_4QMA"].shift(-1)
-        - agg_data[f"{country}_Monetary policy or key interest rate_4QMA"]
-    )
-
-    if not applyWindow:
-        for spread_id, g in id_data.groupby("spread_id"):
-            window = g
-            alpha = compute_alpha(window, country)
-            for i in range(len(g)):
-                actual_mev_diff = g.iloc[i]["MEV_diff"]
+    
+    LC_CC_split_output["Driver"] = "Interest Expense Driver"
+    LC_CC_split_output["Sector"] = sector
+    LC_CC_split_output["Sub-sector"] = "All"
+    LC_CC_split_output["As of Date"] = current_date
+    LC_CC_split_output = LC_CC_split_output.rename(columns={"Value": "Alpha"})
+    
+    MC_split_output["Driver"] = "Interest Expense Driver"
+    MC_split_output["Sector"] = sector
+    MC_split_output["Sub-sector"] = "All"
+    MC_split_output["As of Date"] = current_date
+    MC_split_output = MC_split_output.rename(columns={"Value": "Alpha"})
+    
+    new_order = [
+        "Driver",
+        "Sector",
+        "Sub-sector",
+        "Country",
+        "Alpha Base",
+        "Alpha",
+        "As of Date",
+    ]
+    agg_output = agg_output[new_order]
+    LC_CC_split_output = LC_CC_split_output[new_order]
+    MC_split_output = MC_split_output[new_order]
+    
+    
+    ## backtesting -------------------------------------------------------------------
+    ## Apply rolling window to calculate alpha ----------
+    WINDOW = 3
+    results = []
+    id_bt_rows = []
+    agg_bt_rows = []
+    summary_bt_rows = []
+    for country in interest_data.country_of_risk.unique():
+        agg_data = process_data_country_sector(
+            agg_interest_data, MEVdata, country, sector, aggregate=True
+        )
+        id_data = process_data_country_sector(
+            interest_data, MEVdata, country, sector, aggregate=False
+        )
+    
+        ## for leid level back testing
+        id_data = id_data.sort_values(["spread_id", "DATE_OF_FINANCIALS"])
+        id_data["future_interest_change"] = (
+            id_data.groupby("spread_id")["interest_rate"].shift(-1)
+            - id_data["interest_rate"]
+        )
+        id_data["MEV_diff"] = (
+            id_data.groupby("spread_id")[
+                f"{country}_Monetary policy or key interest rate_4QMA"
+            ].shift(-1)
+            - id_data[f"{country}_Monetary policy or key interest rate_4QMA"]
+        )
+    
+        ## for aggregation backtesting
+        agg_data = agg_data.sort_values(["DATE_OF_FINANCIALS"])
+        agg_data["future_interest_change"] = (
+            agg_data["interest_rate"].shift(-1) - agg_data["interest_rate"]
+        )
+        agg_data["MEV_diff"] = (
+            agg_data[f"{country}_Monetary policy or key interest rate_4QMA"].shift(-1)
+            - agg_data[f"{country}_Monetary policy or key interest rate_4QMA"]
+        )
+    
+        if not applyWindow:
+            for spread_id, g in id_data.groupby("spread_id"):
+                window = g
+                alpha = compute_alpha(window, country)
+                for i in range(len(g)):
+                    actual_mev_diff = g.iloc[i]["MEV_diff"]
+                    pred_interest_change = alpha * actual_mev_diff
+                    id_bt_rows.append(
+                        {
+                            "Country": country,
+                            "spread_id": spread_id,
+                            "date": g.iloc[i]["DATE_OF_FINANCIALS"],
+                            "Alpha": alpha,
+                            "pred_change": pred_interest_change,
+                            "actual_change": g.iloc[i]["future_interest_change"],
+                            #   "future_interest_change": g.iloc[i]["future_interest_change"]
+                        }
+                    )
+    
+            for i in range(len(agg_data)):
+                window = agg_data
+                alpha = compute_alpha(window, country)
+                actual_mev_diff = agg_data.iloc[i]["MEV_diff"]
                 pred_interest_change = alpha * actual_mev_diff
-                id_bt_rows.append(
+                agg_bt_rows.append(
                     {
                         "Country": country,
-                        "spread_id": spread_id,
-                        "date": g.iloc[i]["DATE_OF_FINANCIALS"],
+                        "date": agg_data.iloc[i]["DATE_OF_FINANCIALS"],
                         "Alpha": alpha,
                         "pred_change": pred_interest_change,
-                        "actual_change": g.iloc[i]["future_interest_change"],
+                        "actual_change": agg_data.iloc[i]["future_interest_change"],
                         #   "future_interest_change": g.iloc[i]["future_interest_change"]
                     }
                 )
-
-        for i in range(len(agg_data)):
-            window = agg_data
-            alpha = compute_alpha(window, country)
-            actual_mev_diff = agg_data.iloc[i]["MEV_diff"]
-            pred_interest_change = alpha * actual_mev_diff
-            agg_bt_rows.append(
-                {
-                    "Country": country,
-                    "date": agg_data.iloc[i]["DATE_OF_FINANCIALS"],
-                    "Alpha": alpha,
-                    "pred_change": pred_interest_change,
-                    "actual_change": agg_data.iloc[i]["future_interest_change"],
-                    #   "future_interest_change": g.iloc[i]["future_interest_change"]
-                }
-            )
-
-        if globalmodel:
-            # handle global model
-            regional_country_list = []
-            for (
-                key,
-                values,
-            ) in (
-                country_group_mapping.items()
-            ):  # key refers to region, values refers to countries
-                regional_country_list = list(set(regional_country_list + values))
-                if country in regional_country_list:
-                    for key, values in country_group_mapping.items():
-                        if country in values:
-                            summary_alpha = summary_testing[
-                                summary_testing["Country"] == key
-                            ]["Alpha"].values[0]
+    
+            if globalmodel:
+                # handle global model
+                regional_country_list = []
+                for (
+                    key,
+                    values,
+                ) in (
+                    country_group_mapping.items()
+                ):  # key refers to region, values refers to countries
+                    regional_country_list = list(set(regional_country_list + values))
+                    if country in regional_country_list:
+                        for key, values in country_group_mapping.items():
+                            if country in values:
+                                summary_alpha = summary_testing[
+                                    summary_testing["Country"] == key
+                                ]["Alpha"].values[0]
+                    else:
+                        summary_alpha = summary_testing[
+                            summary_testing["Country"] == "All countries average"
+                        ]["Alpha"].values[0]
+            else:
+                if country in summary_testing["Country"].values:
+                    summary_alpha = summary_testing[
+                        summary_testing["Country"] == country
+                    ]["Alpha"].values[0]
                 else:
                     summary_alpha = summary_testing[
-                        summary_testing["Country"] == "All countries average"
+                        summary_testing["Country"] == "Others"
                     ]["Alpha"].values[0]
+    
+            for i in range(len(agg_data)):
+                window = agg_data
+                alpha = compute_alpha(window, country)
+                actual_mev_diff = agg_data.iloc[i]["MEV_diff"]
+                pred_interest_change = alpha * actual_mev_diff
+                summary_bt_rows.append(
+                    {
+                        "Country": country,
+                        "date": agg_data.iloc[i]["DATE_OF_FINANCIALS"],
+                        "Alpha": alpha,
+                        "pred_change": pred_interest_change,
+                        "actual_change": agg_data.iloc[i]["future_interest_change"],
+                        #   "future_interest_change": g.iloc[i]["future_interest_change"]
+                    }
+                )
+    
         else:
+            for spread_id, g in id_data.groupby("spread_id"):
+                if len(g) < WINDOW:
+                    continue
+                for i in range(WINDOW, len(g)):
+                    window = g.iloc[i - WINDOW : i]
+                    alpha = compute_alpha(window, country)
+                    actual_mev_diff = g.iloc[i]["MEV_diff"]
+                    pred_interest_change = alpha * actual_mev_diff
+                    id_bt_rows.append(
+                        {
+                            "Country": country,
+                            "spread_id": spread_id,
+                            "date": g.iloc[i]["DATE_OF_FINANCIALS"],
+                            "Alpha": alpha,
+                            "pred_change": pred_interest_change,
+                            "actual_change": g.iloc[i]["future_interest_change"],
+                        }
+                    )
+    
+            for i in range(WINDOW, len(agg_data)):
+                window = agg_data.iloc[i - WINDOW : i]
+                alpha = compute_alpha(window, country)
+                actual_mev_diff = agg_data.iloc[i]["MEV_diff"]
+                pred_interest_change = alpha * actual_mev_diff
+                agg_bt_rows.append(
+                    {
+                        "Country": country,
+                        "date": agg_data.iloc[i]["DATE_OF_FINANCIALS"],
+                        "Alpha": alpha,
+                        "pred_change": pred_interest_change,
+                        "actual_change": agg_data.iloc[i]["future_interest_change"],
+                        #   "future_interest_change": g.iloc[i]["future_interest_change"]
+                    }
+                )
+    
             if country in summary_testing["Country"].values:
                 summary_alpha = summary_testing[
                     summary_testing["Country"] == country
@@ -1250,571 +1311,510 @@ for country in interest_data.country_of_risk.unique():
                 summary_alpha = summary_testing[
                     summary_testing["Country"] == "Others"
                 ]["Alpha"].values[0]
-
-        for i in range(len(agg_data)):
-            window = agg_data
-            alpha = compute_alpha(window, country)
-            actual_mev_diff = agg_data.iloc[i]["MEV_diff"]
-            pred_interest_change = alpha * actual_mev_diff
-            summary_bt_rows.append(
-                {
-                    "Country": country,
-                    "date": agg_data.iloc[i]["DATE_OF_FINANCIALS"],
-                    "Alpha": alpha,
-                    "pred_change": pred_interest_change,
-                    "actual_change": agg_data.iloc[i]["future_interest_change"],
-                    #   "future_interest_change": g.iloc[i]["future_interest_change"]
-                }
-            )
-
-    else:
-        for spread_id, g in id_data.groupby("spread_id"):
-            if len(g) < WINDOW:
-                continue
-            for i in range(WINDOW, len(g)):
-                window = g.iloc[i - WINDOW : i]
-                alpha = compute_alpha(window, country)
-                actual_mev_diff = g.iloc[i]["MEV_diff"]
-                pred_interest_change = alpha * actual_mev_diff
-                id_bt_rows.append(
+    
+            for i in range(len(agg_data)):
+                window = agg_data
+                actual_mev_diff = agg_data.iloc[i]["MEV_diff"]
+                pred_interest_change = summary_alpha * actual_mev_diff
+                summary_bt_rows.append(
                     {
                         "Country": country,
-                        "spread_id": spread_id,
-                        "date": g.iloc[i]["DATE_OF_FINANCIALS"],
-                        "Alpha": alpha,
+                        "date": agg_data.iloc[i]["DATE_OF_FINANCIALS"],
+                        "Alpha": summary_alpha,
                         "pred_change": pred_interest_change,
-                        "actual_change": g.iloc[i]["future_interest_change"],
+                        "actual_change": agg_data.iloc[i]["future_interest_change"],
+                        #   "future_interest_change": g.iloc[i]["future_interest_change"]
                     }
                 )
-
-        for i in range(WINDOW, len(agg_data)):
-            window = agg_data.iloc[i - WINDOW : i]
-            alpha = compute_alpha(window, country)
-            actual_mev_diff = agg_data.iloc[i]["MEV_diff"]
-            pred_interest_change = alpha * actual_mev_diff
-            agg_bt_rows.append(
-                {
-                    "Country": country,
-                    "date": agg_data.iloc[i]["DATE_OF_FINANCIALS"],
-                    "Alpha": alpha,
-                    "pred_change": pred_interest_change,
-                    "actual_change": agg_data.iloc[i]["future_interest_change"],
-                    #   "future_interest_change": g.iloc[i]["future_interest_change"]
-                }
-            )
-
-        if country in summary_testing["Country"].values:
-            summary_alpha = summary_testing[
-                summary_testing["Country"] == country
-            ]["Alpha"].values[0]
-        else:
-            summary_alpha = summary_testing[
-                summary_testing["Country"] == "Others"
-            ]["Alpha"].values[0]
-
-        for i in range(len(agg_data)):
-            window = agg_data
-            actual_mev_diff = agg_data.iloc[i]["MEV_diff"]
-            pred_interest_change = summary_alpha * actual_mev_diff
-            summary_bt_rows.append(
-                {
-                    "Country": country,
-                    "date": agg_data.iloc[i]["DATE_OF_FINANCIALS"],
-                    "Alpha": summary_alpha,
-                    "pred_change": pred_interest_change,
-                    "actual_change": agg_data.iloc[i]["future_interest_change"],
-                    #   "future_interest_change": g.iloc[i]["future_interest_change"]
-                }
-            )
-
-id_alpha_ts_df = pd.DataFrame(id_bt_rows).dropna()
-agg_alpha_ts_df = pd.DataFrame(agg_bt_rows).dropna()
-summary_ts_df = pd.DataFrame(summary_bt_rows).dropna()
-
-## spread id level testing
-id_rank_ic = id_alpha_ts_df["pred_change"].corr(
-    id_alpha_ts_df["actual_change"], method="spearman"
-)
-id_alpha_ts_df["rank_ic"] = id_rank_ic
-id_alpha_ts_df["HSE"] = (
-    id_alpha_ts_df["pred_change"] - id_alpha_ts_df["actual_change"]
-) ** 2
-id_alpha_ts_df["MAE"] = (
-    id_alpha_ts_df["pred_change"] - id_alpha_ts_df["actual_change"]
-).abs()
-rss_id = (
-    (id_alpha_ts_df["actual_change"] - id_alpha_ts_df["pred_change"]) ** 2
-).sum()
-tss_id = (
-    (id_alpha_ts_df["actual_change"] - id_alpha_ts_df["actual_change"].mean()) ** 2
-).sum()
-id_alpha_ts_df["R2"] = 1 - rss_id / tss_id
-
-## aggregated testing
-agg_rank_ic = agg_alpha_ts_df["pred_change"].corr(
-    agg_alpha_ts_df["actual_change"], method="spearman"
-)
-agg_alpha_ts_df["rank_ic"] = agg_rank_ic
-agg_alpha_ts_df["HSE"] = (
-    agg_alpha_ts_df["pred_change"] - agg_alpha_ts_df["actual_change"]
-) ** 2
-agg_alpha_ts_df["MAE"] = (
-    agg_alpha_ts_df["pred_change"] - agg_alpha_ts_df["actual_change"]
-).abs()
-rss_agg = (
-    (agg_alpha_ts_df["actual_change"] - agg_alpha_ts_df["pred_change"]) ** 2
-).sum()
-tss_agg = (
-    (agg_alpha_ts_df["actual_change"] - agg_alpha_ts_df["actual_change"].mean()) ** 2
-).sum()
-agg_alpha_ts_df["R2"] = 1 - rss_agg / tss_agg
-
-## without aggregate country testing
-rank_ic = summary_ts_df["pred_change"].corr(
-    summary_ts_df["actual_change"], method="spearman"
-)
-summary_ts_df["rank_ic"] = rank_ic
-summary_ts_df["HSE"] = (
-    summary_ts_df["pred_change"] - summary_ts_df["actual_change"]
-) ** 2
-summary_ts_df["MAE"] = (
-    summary_ts_df["pred_change"] - summary_ts_df["actual_change"]
-).abs()
-rss = (
-    (summary_ts_df["actual_change"] - summary_ts_df["pred_change"]) ** 2
-).sum()
-tss = (
-    (summary_ts_df["actual_change"] - summary_ts_df["actual_change"].mean()) ** 2
-).sum()
-summary_ts_df["R2"] = 1 - rss / tss
-
-# -----------------------------------------
-# Prepare data for bar chart
-country_output_LCY = country_output[country_output["Alpha Base"] == "LCY"]
-country_output_LCY = country_output_LCY.rename(columns={"Alpha": "LCY"})
-country_output_LCY = country_output_LCY.drop(
-    ["Alpha Base", "Driver", "Sector", "Sub-sector", "As of Date"], axis=1
-)
-
-country_output_FCY = country_output[country_output["Alpha Base"] == "FCY (USD)"]
-country_output_FCY = country_output_FCY.rename(columns={"Alpha": "FCY"})
-country_output_FCY = country_output_FCY.drop(
-    ["Alpha Base", "Driver", "Sector", "Sub-sector", "As of Date"], axis=1
-)
-
-country_output_bchart = pd.merge(
-    country_output_LCY, country_output_FCY, on="Country"
-)
-
-# Create IE bar chart
-plt.figure(figsize=(16, 10))
-
-index = np.arange(len(country_output_bchart["Country"]))
-bar_width = 0.35
-opacity = 0.8
-
-rects1 = plt.bar(
-    index + bar_width,
-    country_output_bchart["LCY"],
-    bar_width,
-    alpha=opacity,
-    color="royalblue",
-    label="LCY",
-)
-
-rects2 = plt.bar(
-    index + 2 * bar_width + 0.05,
-    country_output_bchart["FCY"],
-    bar_width,
-    alpha=opacity,
-    color="darkorange",
-    label="FCY",
-)
-
-plt.title(f"Alpha Parameter - {sector}", fontsize=16)
-plt.xticks(
-    index + 3 * bar_width / 2,
-    country_output_bchart["Country"],
-    fontsize=12,
-)
-plt.xticks(wrap=True)
-plt.legend(loc="upper center", ncol=2)
-
-
-# Add labels
-def add_labels_LCY(x, y):
-    for i in range(len(x)):
-        lable_LCY = ((y[i] * 100).round(0)).astype("int")
-        plt.text(
-            i + bar_width,
-            y[i] + 0.01,
-            f"{lable_LCY}" + "%",
-            ha="center",
-            fontsize=12,
-        )  # Aligning text for LCY
-
-
-def add_labels_FCY(x, y):
-    for i in range(len(x)):
-        lable_FCY = ((y[i] * 100).round(0)).astype("int")
-        plt.text(
-            i + bar_width + 0.4,
-            y[i] + 0.01,
-            f"{lable_FCY}" + "%",
-            ha="center",
-            fontsize=12,
-        )  # Aligning text for FCY right of LCY
-
-
-add_labels_LCY(country_output_bchart["Country"], country_output_bchart["LCY"])
-add_labels_FCY(country_output_bchart["Country"], country_output_bchart["FCY"])
-
-
-def data_for_chart(data, split):
-    output_LCY = data[data["Alpha Base"] == "LCY"]
-    output_LCY = output_LCY.rename(columns={"Alpha": "LCY"})
-    output_LCY = output_LCY.drop(
+    
+    id_alpha_ts_df = pd.DataFrame(id_bt_rows).dropna()
+    agg_alpha_ts_df = pd.DataFrame(agg_bt_rows).dropna()
+    summary_ts_df = pd.DataFrame(summary_bt_rows).dropna()
+    
+    ## spread id level testing
+    id_rank_ic = id_alpha_ts_df["pred_change"].corr(
+        id_alpha_ts_df["actual_change"], method="spearman"
+    )
+    id_alpha_ts_df["rank_ic"] = id_rank_ic
+    id_alpha_ts_df["HSE"] = (
+        id_alpha_ts_df["pred_change"] - id_alpha_ts_df["actual_change"]
+    ) ** 2
+    id_alpha_ts_df["MAE"] = (
+        id_alpha_ts_df["pred_change"] - id_alpha_ts_df["actual_change"]
+    ).abs()
+    rss_id = (
+        (id_alpha_ts_df["actual_change"] - id_alpha_ts_df["pred_change"]) ** 2
+    ).sum()
+    tss_id = (
+        (id_alpha_ts_df["actual_change"] - id_alpha_ts_df["actual_change"].mean()) ** 2
+    ).sum()
+    id_alpha_ts_df["R2"] = 1 - rss_id / tss_id
+    
+    ## aggregated testing
+    agg_rank_ic = agg_alpha_ts_df["pred_change"].corr(
+        agg_alpha_ts_df["actual_change"], method="spearman"
+    )
+    agg_alpha_ts_df["rank_ic"] = agg_rank_ic
+    agg_alpha_ts_df["HSE"] = (
+        agg_alpha_ts_df["pred_change"] - agg_alpha_ts_df["actual_change"]
+    ) ** 2
+    agg_alpha_ts_df["MAE"] = (
+        agg_alpha_ts_df["pred_change"] - agg_alpha_ts_df["actual_change"]
+    ).abs()
+    rss_agg = (
+        (agg_alpha_ts_df["actual_change"] - agg_alpha_ts_df["pred_change"]) ** 2
+    ).sum()
+    tss_agg = (
+        (agg_alpha_ts_df["actual_change"] - agg_alpha_ts_df["actual_change"].mean()) ** 2
+    ).sum()
+    agg_alpha_ts_df["R2"] = 1 - rss_agg / tss_agg
+    
+    ## without aggregate country testing
+    rank_ic = summary_ts_df["pred_change"].corr(
+        summary_ts_df["actual_change"], method="spearman"
+    )
+    summary_ts_df["rank_ic"] = rank_ic
+    summary_ts_df["HSE"] = (
+        summary_ts_df["pred_change"] - summary_ts_df["actual_change"]
+    ) ** 2
+    summary_ts_df["MAE"] = (
+        summary_ts_df["pred_change"] - summary_ts_df["actual_change"]
+    ).abs()
+    rss = (
+        (summary_ts_df["actual_change"] - summary_ts_df["pred_change"]) ** 2
+    ).sum()
+    tss = (
+        (summary_ts_df["actual_change"] - summary_ts_df["actual_change"].mean()) ** 2
+    ).sum()
+    summary_ts_df["R2"] = 1 - rss / tss
+    
+    # -----------------------------------------
+    # Prepare data for bar chart
+    country_output_LCY = country_output[country_output["Alpha Base"] == "LCY"]
+    country_output_LCY = country_output_LCY.rename(columns={"Alpha": "LCY"})
+    country_output_LCY = country_output_LCY.drop(
         ["Alpha Base", "Driver", "Sector", "Sub-sector", "As of Date"], axis=1
     )
-
-    output_FCY = data[data["Alpha Base"] == "FCY (USD)"]
-    output_FCY = output_FCY.rename(columns={"Alpha": "FCY"})
-    output_FCY = output_FCY.drop(
+    
+    country_output_FCY = country_output[country_output["Alpha Base"] == "FCY (USD)"]
+    country_output_FCY = country_output_FCY.rename(columns={"Alpha": "FCY"})
+    country_output_FCY = country_output_FCY.drop(
         ["Alpha Base", "Driver", "Sector", "Sub-sector", "As of Date"], axis=1
     )
-
-    if split == "Portfolio":
-        output_bchart = pd.merge(output_LCY, output_FCY, on="Portfolio")
-        add_labels_LCY(output_bchart["Portfolio"], output_bchart["LCY"])
-        add_labels_FCY(output_bchart["Portfolio"], output_bchart["FCY"])
-    else:
-        output_bchart = pd.merge(output_LCY, output_FCY, on="Country")
-        add_labels_LCY(output_bchart["Country"], output_bchart["LCY"])
-        add_labels_FCY(output_bchart["Country"], output_bchart["FCY"])
-
-    return output_bchart
-
-
-portfolio_output_bchart = data_for_chart(portfolio_output, "Portfolio")
-LC_CC_output_bchart = data_for_chart(LC_CC_split_output, "Country")
-MC_output_bchart = data_for_chart(MC_split_output, "Country")
-
-# Display or save
-# - output chart excel-----------
-def outputChart_excel(
-    data,
-    chartTitle,
-    workbook,
-    sheet_name,
-    scales=np.arange(-2, 2.2, 0.05),  # At least 20, but max 100 for granularity
-    plotSeaboneHistplot=False,
-    pdfPagesObject=None,
-    figsize=(10, 6),
-    xrange=(-2, 2),
-):
-    fig, ax = plt.subplots(figsize=figsize)
-
-    plt.hist(
-        data,
-        bins=bin_edges,
-        alpha=0.7,
-        color="blue",
-        edgecolor="black",
-        label="Histogram (Count)",
+    
+    country_output_bchart = pd.merge(
+        country_output_LCY, country_output_FCY, on="Country"
     )
-
-    # Calculate percentiles
-    percentile_values = [data.quantile(p / 100) for p in percentiles_for_chart]
-
-    for i, (perc, value) in enumerate(
-        zip(percentiles_for_chart, percentile_values)
-    ):
-        color = "green" if i == 0 else "red"
-        label_text = f"{perc}th Percentile: {value:.4f}"
-        plt.axvline(
-            value,
-            color=color,
-            linestyle="-",
-            linewidth=1.5,
-            label=label_text,
-        )
-
-    if xrange:
-        # Set X-axis range
-        ax.set_xlim(xrange[0], xrange[1])
-
-    ax.set_title(chartTitle)
-    ax.set_xlabel("Interest Rate")
-    ax.set_ylabel("Frequency")
-    ax.legend(fontsize=8)
-    ax.grid(axis="y", alpha=0.75)
-
-    imgdata = BytesIO()
-    fig.savefig(imgdata, format="png", bbox_inches="tight")
-    plt.close(fig)
-    imgdata.seek(0)
-
-    ws = workbook.create_sheet(sheet_name[:31])
-    img = Image(imgdata)
-    ws.add_image(img, "B2")
-
-
-## -output final results as chart in excel
-def final_chart(
-    data,
-    split_type,
-    chartTitle,
-    workbook,
-    sheet_name,
-):
-    plt.figure(figsize=(10, 6))
-
-    if split_type == "Country":
-        index = np.arange(len(data["Country"]))
-        bar_width = 0.35
-        opacity = 0.8
-
-        rects1 = plt.bar(
-            index + bar_width,
-            data["LCY"],
-            bar_width,
-            alpha=opacity,
-            color="royalblue",
-            label="LCY",
-        )
-
-        rects2 = plt.bar(
-            index + 2 * bar_width + 0.05,
-            data["FCY"],
-            bar_width,
-            alpha=opacity,
-            color="darkorange",
-            label="FCY",
-        )
-
-        plt.title(chartTitle, fontsize=16)
-        plt.xticks(
-            index + 3 * bar_width / 2, data["Country"], fontsize=12
-        )
-        plt.xticks(wrap=True)
-        plt.legend(loc="upper center", ncol=2)
-
-        # Add labels
-        def add_labels_LCY(x, y):
-            for i in range(len(x)):
-                lable_LCY = ((y[i] * 100).round(0)).astype("int")
-                plt.text(
-                    i + bar_width,
-                    y[i] + 0.01,
-                    f"{lable_LCY}" + "%",
-                    ha="center",
-                    fontsize=12,
-                )  # Aligning text for LCY
-
-        def add_labels_FCY(x, y):
-            for i in range(len(x)):
-                lable_FCY = ((y[i] * 100).round(0)).astype("int")
-                plt.text(
-                    i + bar_width + 0.4,
-                    y[i] + 0.01,
-                    f"{lable_FCY}" + "%",
-                    ha="center",
-                    fontsize=12,
-                )  # Aligning text for FCY right of LCY
-
-        add_labels_LCY(data["Country"], data["LCY"])
-        add_labels_FCY(data["Country"], data["FCY"])
-
-    else:
-        index = np.arange(len(data["Portfolio"]))
-        bar_width = 0.35
-        opacity = 0.8
-
-        rects1 = plt.bar(
-            index + bar_width,
-            data["LCY"],
-            bar_width,
-            alpha=opacity,
-            color="royalblue",
-            label="LCY",
-        )
-
-        rects2 = plt.bar(
-            index + 2 * bar_width + 0.05,
-            data["FCY"],
-            bar_width,
-            alpha=opacity,
-            color="darkorange",
-            label="FCY",
-        )
-
-        plt.title(chartTitle, fontsize=16)
-        plt.xticks(
-            index + 3 * bar_width / 2, data["Portfolio"], fontsize=12
-        )
-        plt.xticks(wrap=True)
-        plt.legend(loc="upper center", ncol=2)
-
-        # Add labels
-        def add_labels_LCY(x, y):
-            for i in range(len(x)):
-                lable_LCY = ((y[i] * 100).round(0)).astype("int")
-                plt.text(
-                    i + bar_width,
-                    y[i] + 0.01,
-                    f"{lable_LCY}" + "%",
-                    ha="center",
-                    fontsize=12,
-                )  # Aligning text for LCY
-
-        def add_labels_FCY(x, y):
-            for i in range(len(x)):
-                lable_FCY = ((y[i] * 100).round(0)).astype("int")
-                plt.text(
-                    i + bar_width + 0.4,
-                    y[i] + 0.01,
-                    f"{lable_FCY}" + "%",
-                    ha="center",
-                    fontsize=12,
-                )  # Aligning text for FCY right of LCY
-
-        add_labels_LCY(data["Portfolio"], data["LCY"])
-        add_labels_FCY(data["Portfolio"], data["FCY"])
-
-    plt.ylim(0, 1)
-    plt.yticks(
-        ticks=[0, 0.2, 0.4, 0.6, 0.8, 1],
-        labels=["0%", "20%", "40%", "60%", "80%", "100%"],
+    
+    # Create IE bar chart
+    plt.figure(figsize=(16, 10))
+    
+    index = np.arange(len(country_output_bchart["Country"]))
+    bar_width = 0.35
+    opacity = 0.8
+    
+    rects1 = plt.bar(
+        index + bar_width,
+        country_output_bchart["LCY"],
+        bar_width,
+        alpha=opacity,
+        color="royalblue",
+        label="LCY",
+    )
+    
+    rects2 = plt.bar(
+        index + 2 * bar_width + 0.05,
+        country_output_bchart["FCY"],
+        bar_width,
+        alpha=opacity,
+        color="darkorange",
+        label="FCY",
+    )
+    
+    plt.title(f"Alpha Parameter - {sector}", fontsize=16)
+    plt.xticks(
+        index + 3 * bar_width / 2,
+        country_output_bchart["Country"],
         fontsize=12,
     )
-    plt.tight_layout()
-
-    imgdata = BytesIO()
-    plt.savefig(imgdata, format="png", dpi=130)
-    plt.close()
-    imgdata.seek(0)
-
-    ws = workbook.create_sheet(sheet_name[:31])
-    img = Image(imgdata)
-    ws.add_image(img, "B2")
-
-
-# summary_df.to_excel("spread_summary_by_region.xlsx", index=False)
-summary_all = pd.concat(
-    [summary_1, summary_2, summary_3, summary_4, summary_5, summary_6, summary_7, summary_8],
-    ignore_index=True,
-)
-
-# ---- Step 1: Define preferred region order ----
-preferred_order = top_countries_1 + ["Others"]
-
-# ---- Step 2: Create wide table for Total datapoints ----
-datapoints_wide = summary_all.pivot(
-    index="Step", columns="Region", values="Total datapoints"
-)
-datapoints_wide = datapoints_wide.reindex(columns=preferred_order)
-datapoints_wide = datapoints_wide.fillna(0).astype(int)
-
-# ---- Step 3: Create wide table for Unique spread IDs ----
-spread_ids_wide = summary_all.pivot(
-    index="Step", columns="Region", values="Unique spread IDs"
-)
-spread_ids_wide = spread_ids_wide.reindex(columns=preferred_order)
-spread_ids_wide = spread_ids_wide.fillna(0).astype(int)
-
-datapoints_wide_renamed = datapoints_wide.add_suffix("-datapoints")
-spread_ids_wide_renamed = spread_ids_wide.add_suffix("-spread_ids")
-concat_df = pd.concat([datapoints_wide_renamed, spread_ids_wide_renamed], axis=1)
-
-# ---- Step 4: Create wide table for HC,LC, CC ----
-portfolio_table = {
-    summary_all.groupby("Step")[["LC+CC datapoints", "HC datapoints"]].sum()
-}
-
-steps_df = pd.concat([concat_df, portfolio_table], axis=1)
-steps_df = steps_df.reset_index()
-
-# -----------------------------------------
-## Consolidated output
-os.makedirs(os.path.dirname(consolid_path), exist_ok=True)
-with pd.ExcelWriter(consolid_path, engine="openpyxl") as writer:
-    all_country_frame.to_excel(writer, sheet_name="all country modelling data", index=False)
-    agg_frame.to_excel(writer, sheet_name="aggregate modelling data", index=False)
-    # agg_output.to_excel(writer, sheet_name="aggregate output", index=False)
-    interest_data_df.to_excel(writer, sheet_name="interest data", index=False)
-    leid_output.to_excel(writer, sheet_name="LEID level output", index=False)
-    country_output.to_excel(writer, sheet_name="Country level output", index=True)
-    portfolio_output.to_excel(writer, sheet_name="Portfolio level output", index=True)
-    steps_df.to_excel(writer, sheet_name="Data cleaning steps", index=False)
-    summary_ts_df.to_excel(writer, sheet_name="Backtest full data", index=False)
-    agg_alpha_ts_df.to_excel(writer, sheet_name="Backtest aggregated data", index=False)
-    id_alpha_ts_df.to_excel(writer, sheet_name="Backtest ID level", index=False)
-
-    ## add charts in excel ........................................................
-    wb = writer.book
-    outputChart_excel(
-        data=interest_data_df["interest_rate"],
-        chartTitle="Interest Rate Distribution full data(before filtering >0.5)",
-        workbook=wb,
-        sheet_name="interest rate charts full",
-        bin_edges=np.arange(0, 1.2, 0.02),
-        xrange=(0, 1),
+    plt.xticks(wrap=True)
+    plt.legend(loc="upper center", ncol=2)
+    
+    
+    # Add labels
+    def add_labels_LCY(x, y):
+        for i in range(len(x)):
+            lable_LCY = ((y[i] * 100).round(0)).astype("int")
+            plt.text(
+                i + bar_width,
+                y[i] + 0.01,
+                f"{lable_LCY}" + "%",
+                ha="center",
+                fontsize=12,
+            )  # Aligning text for LCY
+    
+    
+    def add_labels_FCY(x, y):
+        for i in range(len(x)):
+            lable_FCY = ((y[i] * 100).round(0)).astype("int")
+            plt.text(
+                i + bar_width + 0.4,
+                y[i] + 0.01,
+                f"{lable_FCY}" + "%",
+                ha="center",
+                fontsize=12,
+            )  # Aligning text for FCY right of LCY
+    
+    
+    add_labels_LCY(country_output_bchart["Country"], country_output_bchart["LCY"])
+    add_labels_FCY(country_output_bchart["Country"], country_output_bchart["FCY"])
+    
+    
+    def data_for_chart(data, split):
+        output_LCY = data[data["Alpha Base"] == "LCY"]
+        output_LCY = output_LCY.rename(columns={"Alpha": "LCY"})
+        output_LCY = output_LCY.drop(
+            ["Alpha Base", "Driver", "Sector", "Sub-sector", "As of Date"], axis=1
+        )
+    
+        output_FCY = data[data["Alpha Base"] == "FCY (USD)"]
+        output_FCY = output_FCY.rename(columns={"Alpha": "FCY"})
+        output_FCY = output_FCY.drop(
+            ["Alpha Base", "Driver", "Sector", "Sub-sector", "As of Date"], axis=1
+        )
+    
+        if split == "Portfolio":
+            output_bchart = pd.merge(output_LCY, output_FCY, on="Portfolio")
+            add_labels_LCY(output_bchart["Portfolio"], output_bchart["LCY"])
+            add_labels_FCY(output_bchart["Portfolio"], output_bchart["FCY"])
+        else:
+            output_bchart = pd.merge(output_LCY, output_FCY, on="Country")
+            add_labels_LCY(output_bchart["Country"], output_bchart["LCY"])
+            add_labels_FCY(output_bchart["Country"], output_bchart["FCY"])
+    
+        return output_bchart
+    
+    
+    portfolio_output_bchart = data_for_chart(portfolio_output, "Portfolio")
+    LC_CC_output_bchart = data_for_chart(LC_CC_split_output, "Country")
+    MC_output_bchart = data_for_chart(MC_split_output, "Country")
+    
+    # Display or save
+    # - output chart excel-----------
+    def outputChart_excel(
+        data,
+        chartTitle,
+        workbook,
+        sheet_name,
+        scales=np.arange(-2, 2.2, 0.05),  # At least 20, but max 100 for granularity
+        plotSeaboneHistplot=False,
+        pdfPagesObject=None,
+        figsize=(10, 6),
+        xrange=(-2, 2),
+    ):
+        fig, ax = plt.subplots(figsize=figsize)
+    
+        plt.hist(
+            data,
+            bins=bin_edges,
+            alpha=0.7,
+            color="blue",
+            edgecolor="black",
+            label="Histogram (Count)",
+        )
+    
+        # Calculate percentiles
+        percentile_values = [data.quantile(p / 100) for p in percentiles_for_chart]
+    
+        for i, (perc, value) in enumerate(
+            zip(percentiles_for_chart, percentile_values)
+        ):
+            color = "green" if i == 0 else "red"
+            label_text = f"{perc}th Percentile: {value:.4f}"
+            plt.axvline(
+                value,
+                color=color,
+                linestyle="-",
+                linewidth=1.5,
+                label=label_text,
+            )
+    
+        if xrange:
+            # Set X-axis range
+            ax.set_xlim(xrange[0], xrange[1])
+    
+        ax.set_title(chartTitle)
+        ax.set_xlabel("Interest Rate")
+        ax.set_ylabel("Frequency")
+        ax.legend(fontsize=8)
+        ax.grid(axis="y", alpha=0.75)
+    
+        imgdata = BytesIO()
+        fig.savefig(imgdata, format="png", bbox_inches="tight")
+        plt.close(fig)
+        imgdata.seek(0)
+    
+        ws = workbook.create_sheet(sheet_name[:31])
+        img = Image(imgdata)
+        ws.add_image(img, "B2")
+    
+    
+    ## -output final results as chart in excel
+    def final_chart(
+        data,
+        split_type,
+        chartTitle,
+        workbook,
+        sheet_name,
+    ):
+        plt.figure(figsize=(10, 6))
+    
+        if split_type == "Country":
+            index = np.arange(len(data["Country"]))
+            bar_width = 0.35
+            opacity = 0.8
+    
+            rects1 = plt.bar(
+                index + bar_width,
+                data["LCY"],
+                bar_width,
+                alpha=opacity,
+                color="royalblue",
+                label="LCY",
+            )
+    
+            rects2 = plt.bar(
+                index + 2 * bar_width + 0.05,
+                data["FCY"],
+                bar_width,
+                alpha=opacity,
+                color="darkorange",
+                label="FCY",
+            )
+    
+            plt.title(chartTitle, fontsize=16)
+            plt.xticks(
+                index + 3 * bar_width / 2, data["Country"], fontsize=12
+            )
+            plt.xticks(wrap=True)
+            plt.legend(loc="upper center", ncol=2)
+    
+            # Add labels
+            def add_labels_LCY(x, y):
+                for i in range(len(x)):
+                    lable_LCY = ((y[i] * 100).round(0)).astype("int")
+                    plt.text(
+                        i + bar_width,
+                        y[i] + 0.01,
+                        f"{lable_LCY}" + "%",
+                        ha="center",
+                        fontsize=12,
+                    )  # Aligning text for LCY
+    
+            def add_labels_FCY(x, y):
+                for i in range(len(x)):
+                    lable_FCY = ((y[i] * 100).round(0)).astype("int")
+                    plt.text(
+                        i + bar_width + 0.4,
+                        y[i] + 0.01,
+                        f"{lable_FCY}" + "%",
+                        ha="center",
+                        fontsize=12,
+                    )  # Aligning text for FCY right of LCY
+    
+            add_labels_LCY(data["Country"], data["LCY"])
+            add_labels_FCY(data["Country"], data["FCY"])
+    
+        else:
+            index = np.arange(len(data["Portfolio"]))
+            bar_width = 0.35
+            opacity = 0.8
+    
+            rects1 = plt.bar(
+                index + bar_width,
+                data["LCY"],
+                bar_width,
+                alpha=opacity,
+                color="royalblue",
+                label="LCY",
+            )
+    
+            rects2 = plt.bar(
+                index + 2 * bar_width + 0.05,
+                data["FCY"],
+                bar_width,
+                alpha=opacity,
+                color="darkorange",
+                label="FCY",
+            )
+    
+            plt.title(chartTitle, fontsize=16)
+            plt.xticks(
+                index + 3 * bar_width / 2, data["Portfolio"], fontsize=12
+            )
+            plt.xticks(wrap=True)
+            plt.legend(loc="upper center", ncol=2)
+    
+            # Add labels
+            def add_labels_LCY(x, y):
+                for i in range(len(x)):
+                    lable_LCY = ((y[i] * 100).round(0)).astype("int")
+                    plt.text(
+                        i + bar_width,
+                        y[i] + 0.01,
+                        f"{lable_LCY}" + "%",
+                        ha="center",
+                        fontsize=12,
+                    )  # Aligning text for LCY
+    
+            def add_labels_FCY(x, y):
+                for i in range(len(x)):
+                    lable_FCY = ((y[i] * 100).round(0)).astype("int")
+                    plt.text(
+                        i + bar_width + 0.4,
+                        y[i] + 0.01,
+                        f"{lable_FCY}" + "%",
+                        ha="center",
+                        fontsize=12,
+                    )  # Aligning text for FCY right of LCY
+    
+            add_labels_LCY(data["Portfolio"], data["LCY"])
+            add_labels_FCY(data["Portfolio"], data["FCY"])
+    
+        plt.ylim(0, 1)
+        plt.yticks(
+            ticks=[0, 0.2, 0.4, 0.6, 0.8, 1],
+            labels=["0%", "20%", "40%", "60%", "80%", "100%"],
+            fontsize=12,
+        )
+        plt.tight_layout()
+    
+        imgdata = BytesIO()
+        plt.savefig(imgdata, format="png", dpi=130)
+        plt.close()
+        imgdata.seek(0)
+    
+        ws = workbook.create_sheet(sheet_name[:31])
+        img = Image(imgdata)
+        ws.add_image(img, "B2")
+    
+    
+    # summary_df.to_excel("spread_summary_by_region.xlsx", index=False)
+    summary_all = pd.concat(
+        [summary_1, summary_2, summary_3, summary_4, summary_5, summary_6, summary_7, summary_8],
+        ignore_index=True,
     )
-
-    filtered_data = interest_data_df.loc[
-        interest_data_df["interest_expense_issue"] == "F", "interest_rate"
-    ]
-    outputChart_excel(
-        data=filtered_data,
-        chartTitle="Interest Rate Distribution full data(after filtering >0.5)",
-        workbook=wb,
-        sheet_name="interest rate charts filtered",
-        bin_edges=np.arange(0, 0.6, 0.02),
-        xrange=(0, 0.6),
+    
+    # ---- Step 1: Define preferred region order ----
+    preferred_order = top_countries_1 + ["Others"]
+    
+    # ---- Step 2: Create wide table for Total datapoints ----
+    datapoints_wide = summary_all.pivot(
+        index="Step", columns="Region", values="Total datapoints"
     )
-
-    final_chart(
-        data=country_output_bchart,
-        split_type="Country",
-        chartTitle=f"Alpha Parameter - {sector}",
-        workbook=wb,
-        sheet_name="Final model chart (Country Split)",
+    datapoints_wide = datapoints_wide.reindex(columns=preferred_order)
+    datapoints_wide = datapoints_wide.fillna(0).astype(int)
+    
+    # ---- Step 3: Create wide table for Unique spread IDs ----
+    spread_ids_wide = summary_all.pivot(
+        index="Step", columns="Region", values="Unique spread IDs"
     )
-
-    final_chart(
-        data=portfolio_output_bchart,
-        split_type="Portfolio",
-        chartTitle=f"Alpha Parameter - {sector}",
-        workbook=wb,
-        sheet_name="Final model chart (Portfolio Split)",
-    )
-
-    final_chart(
-        data=LC_CC_output_bchart,
-        split_type="Country",
-        chartTitle=f"Alpha Parameter - {sector}",
-        workbook=wb,
-        sheet_name="Final model chart (LC_CC)",
-    )
-
-    final_chart(
-        data=MC_output_bchart,
-        split_type="Country",
-        chartTitle=f"Alpha Parameter - {sector}",
-        workbook=wb,
-        sheet_name="Final model chart (MC)",
-    )
-
-    # final_chart(
-    #     data=agg_output_bchart,
-    #     split_type="Country",
-    #     chartTitle=f"Alpha Parameter - {sector}",
-    #     workbook=wb,
-    #     sheet_name="Final model chart (Aggregate)",
-    # )
-
-print(f"results excel saved at: {consolid_path}")
-# ===================================================================
+    spread_ids_wide = spread_ids_wide.reindex(columns=preferred_order)
+    spread_ids_wide = spread_ids_wide.fillna(0).astype(int)
+    
+    datapoints_wide_renamed = datapoints_wide.add_suffix("-datapoints")
+    spread_ids_wide_renamed = spread_ids_wide.add_suffix("-spread_ids")
+    concat_df = pd.concat([datapoints_wide_renamed, spread_ids_wide_renamed], axis=1)
+    
+    # ---- Step 4: Create wide table for HC,LC, CC ----
+    portfolio_table = {
+        summary_all.groupby("Step")[["LC+CC datapoints", "HC datapoints"]].sum()
+    }
+    
+    steps_df = pd.concat([concat_df, portfolio_table], axis=1)
+    steps_df = steps_df.reset_index()
+    
+    # -----------------------------------------
+    ## Consolidated output
+    os.makedirs(os.path.dirname(consolid_path), exist_ok=True)
+    with pd.ExcelWriter(consolid_path, engine="openpyxl") as writer:
+        all_country_frame.to_excel(writer, sheet_name="all country modelling data", index=False)
+        agg_frame.to_excel(writer, sheet_name="aggregate modelling data", index=False)
+        # agg_output.to_excel(writer, sheet_name="aggregate output", index=False)
+        interest_data_df.to_excel(writer, sheet_name="interest data", index=False)
+        leid_output.to_excel(writer, sheet_name="LEID level output", index=False)
+        country_output.to_excel(writer, sheet_name="Country level output", index=True)
+        portfolio_output.to_excel(writer, sheet_name="Portfolio level output", index=True)
+        steps_df.to_excel(writer, sheet_name="Data cleaning steps", index=False)
+        summary_ts_df.to_excel(writer, sheet_name="Backtest full data", index=False)
+        agg_alpha_ts_df.to_excel(writer, sheet_name="Backtest aggregated data", index=False)
+        id_alpha_ts_df.to_excel(writer, sheet_name="Backtest ID level", index=False)
+    
+        ## add charts in excel ........................................................
+        wb = writer.book
+        outputChart_excel(
+            data=interest_data_df["interest_rate"],
+            chartTitle="Interest Rate Distribution full data(before filtering >0.5)",
+            workbook=wb,
+            sheet_name="interest rate charts full",
+            bin_edges=np.arange(0, 1.2, 0.02),
+            xrange=(0, 1),
+        )
+    
+        filtered_data = interest_data_df.loc[
+            interest_data_df["interest_expense_issue"] == "F", "interest_rate"
+        ]
+        outputChart_excel(
+            data=filtered_data,
+            chartTitle="Interest Rate Distribution full data(after filtering >0.5)",
+            workbook=wb,
+            sheet_name="interest rate charts filtered",
+            bin_edges=np.arange(0, 0.6, 0.02),
+            xrange=(0, 0.6),
+        )
+    
+        final_chart(
+            data=country_output_bchart,
+            split_type="Country",
+            chartTitle=f"Alpha Parameter - {sector}",
+            workbook=wb,
+            sheet_name="Final model chart (Country Split)",
+        )
+    
+        final_chart(
+            data=portfolio_output_bchart,
+            split_type="Portfolio",
+            chartTitle=f"Alpha Parameter - {sector}",
+            workbook=wb,
+            sheet_name="Final model chart (Portfolio Split)",
+        )
+    
+        final_chart(
+            data=LC_CC_output_bchart,
+            split_type="Country",
+            chartTitle=f"Alpha Parameter - {sector}",
+            workbook=wb,
+            sheet_name="Final model chart (LC_CC)",
+        )
+    
+        final_chart(
+            data=MC_output_bchart,
+            split_type="Country",
+            chartTitle=f"Alpha Parameter - {sector}",
+            workbook=wb,
+            sheet_name="Final model chart (MC)",
+        )
+    
+        # final_chart(
+        #     data=agg_output_bchart,
+        #     split_type="Country",
+        #     chartTitle=f"Alpha Parameter - {sector}",
+        #     workbook=wb,
+        #     sheet_name="Final model chart (Aggregate)",
+        # )
+    
+    print(f"results excel saved at: {consolid_path}")
+    # ===================================================================
 
 if __name__ == "__main__":
     for sector in [
