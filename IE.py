@@ -195,6 +195,8 @@ def get_corr_df(data, country, aggregate, id_column_name, alpha_min, alpha_max):
         # Drop only the first-row NaN introduced by .diff(); keep rows where cb_change_col
         # is NaN (countries with no local CB data — handled downstream via Alpha_US fallback)
         data = data.dropna(subset=["interest_rate_change", "US_rate_change"])
+        if len(data) == 0:
+            return pd.DataFrame()
 
         data["No. of data points"] = data[id_column_name]
         std_df = data.groupby(id_column_name).agg(
@@ -224,6 +226,8 @@ def get_corr_df(data, country, aggregate, id_column_name, alpha_min, alpha_max):
         # Drop only the first-row NaN introduced by .diff(); keep rows where cb_change_col
         # is NaN (countries with no local CB data — handled downstream via Alpha_US fallback)
         data = data.dropna(subset=["interest_rate_change", "US_rate_change"])
+        if len(data) == 0:
+            return pd.DataFrame()
 
         data["No. of data points"] = len(data["DATE_OF_FINANCIALS"])
         std_df = data.agg(
