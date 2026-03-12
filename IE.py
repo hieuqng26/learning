@@ -178,61 +178,77 @@ def process_data_country_sector(
 def get_corr_df(data, country, aggregate, id_column_name, alpha_min, alpha_max):
     """Compute per-entity (or aggregate) correlation, sensitivity, and Alpha against central bank rate.
 
+    Sensitivity and Correlation are computed on period-over-period changes in interest rates
+    rather than levels.
+
     Returns a DataFrame with columns including Sensitivity, Correlation, Alpha, and Alpha_US.
     """
+    cb_col = f"{country}_Monetary policy or key interest rate_4QMA"
+    cb_change_col = f"{country}_rate_change"
+
     if not aggregate:
+        # Compute period-over-period changes within each entity
+        data = data.sort_values([id_column_name, "DATE_OF_FINANCIALS"])
+        data["interest_rate_change"] = data.groupby(id_column_name)["interest_rate"].diff()
+        data[cb_change_col] = data.groupby(id_column_name)[cb_col].diff()
+        data["US_rate_change"] = data.groupby(id_column_name)["Monetary policy or key interest rate_4QMA_US"].diff()
+        data = data.dropna(subset=["interest_rate_change", cb_change_col, "US_rate_change"])
+
         data["No. of data points"] = data[id_column_name]
         std_df = data.groupby(id_column_name).agg(
             {
                 "No. of data points": "count",
                 "country_of_risk": "first",
-                "interest_rate": "std",
-                f"{country}_Monetary policy or key interest rate_4QMA": "std",
-                "Monetary policy or key interest rate_4QMA_US": "std",
+                "interest_rate_change": "std",
+                cb_change_col: "std",
+                "US_rate_change": "std",
                 "irb_ead": "first",  # irb_ead: Internal Ratings-Based Exposure at Default
             }
         )
         std_df["Sensitivity"] = (
-            std_df["interest_rate"]
-            / std_df[f"{country}_Monetary policy or key interest rate_4QMA"]
+            std_df["interest_rate_change"]
+            / std_df[cb_change_col]
         )
         std_df["Sensitivity_US"] = (
-            std_df["interest_rate"]
-            / std_df["Monetary policy or key interest rate_4QMA_US"]
+            std_df["interest_rate_change"]
+            / std_df["US_rate_change"]
         )
     else:
+        # Compute period-over-period changes for aggregate data
+        data = data.sort_values("DATE_OF_FINANCIALS")
+        data["interest_rate_change"] = data["interest_rate"].diff()
+        data[cb_change_col] = data[cb_col].diff()
+        data["US_rate_change"] = data["Monetary policy or key interest rate_4QMA_US"].diff()
+        data = data.dropna(subset=["interest_rate_change", cb_change_col, "US_rate_change"])
+
         data["No. of data points"] = len(data["DATE_OF_FINANCIALS"])
         std_df = data.agg(
             {
                 "No. of data points": "count",
                 "country_of_risk": lambda x: x.iloc[0],
-                "interest_rate": "std",
-                f"{country}_Monetary policy or key interest rate_4QMA": "std",
-                "Monetary policy or key interest rate_4QMA_US": "std",
+                "interest_rate_change": "std",
+                cb_change_col: "std",
+                "US_rate_change": "std",
                 "irb_ead": lambda x: x.iloc[0],
             }
         )
         std_df["Sensitivity"] = (
-            std_df["interest_rate"]
-            / std_df[f"{country}_Monetary policy or key interest rate_4QMA"]
+            std_df["interest_rate_change"]
+            / std_df[cb_change_col]
         )
         std_df["Sensitivity_US"] = (
-            std_df["interest_rate"]
-            / std_df["Monetary policy or key interest rate_4QMA_US"]
+            std_df["interest_rate_change"]
+            / std_df["US_rate_change"]
         )
         std_df = std_df.to_dict()
 
     if not aggregate:
         correlation_per_id = data.groupby(id_column_name).apply(
-            lambda x: x["interest_rate"].corr(
-                x[f"{country}_Monetary policy or key interest rate_4QMA"]
-            )
+            lambda x: x["interest_rate_change"].corr(x[cb_change_col])
         )
 
         correlation_per_id_US = data.groupby(id_column_name).apply(
-            lambda x: x["interest_rate"].corr(
-                x[f"Monetary policy or key interest rate_4QMA_US"]
-            )
+            lambda x: x["interest_rate_change"].corr(x["US_rate_change"])
         )
 
         correlation_df = correlation_per_id.rename("Correlation").reset_index()
@@ -246,12 +262,8 @@ def get_corr_df(data, country, aggregate, id_column_name, alpha_min, alpha_max):
             all_df["Correlation_US"] * all_df["Sensitivity_US"]
         ).clip(lower=alpha_min, upper=alpha_max)
     else:
-        correlation_agg = data["interest_rate"].corr(
-            data[f"{country}_Monetary policy or key interest rate_4QMA"]
-        )
-        correlation_agg_US = data["interest_rate"].corr(
-            data[f"Monetary policy or key interest rate_4QMA_US"]
-        )
+        correlation_agg = data["interest_rate_change"].corr(data[cb_change_col])
+        correlation_agg_US = data["interest_rate_change"].corr(data["US_rate_change"])
 
         std_df["Correlation"] = correlation_agg
         std_df["Correlation_US"] = correlation_agg_US
@@ -267,8 +279,8 @@ def get_corr_df(data, country, aggregate, id_column_name, alpha_min, alpha_max):
     all_df = all_df.rename(
         columns={
             "country_of_risk": "Country",
-            "interest_rate": "Interest Rate Std Dev",
-            f"{country}_Monetary policy or key interest rate_4QMA": "Central bank Interest Rate Std Dev",
+            "interest_rate_change": "Interest Rate Std Dev",
+            cb_change_col: "Central bank Interest Rate Std Dev",
         }
     )
 
@@ -278,16 +290,16 @@ def get_corr_df(data, country, aggregate, id_column_name, alpha_min, alpha_max):
 def compute_alpha(window_df, country, alpha_min, alpha_max):
     """Compute the Alpha parameter for a given data window and country.
 
-    Alpha = Correlation(entity_rate, central_bank_rate) x Sensitivity,
-    clipped to [alpha_min, alpha_max].
+    Alpha = Correlation(entity_rate_change, central_bank_rate_change) x Sensitivity,
+    clipped to [alpha_min, alpha_max]. Sensitivity and Correlation are computed on
+    period-over-period changes in interest rates rather than levels.
     """
-    corr = window_df["interest_rate"].corr(
-        window_df[f"{country}_Monetary policy or key interest rate_4QMA"]
-    )
-    sensitivity = (
-        window_df["interest_rate"].std()
-        / window_df[f"{country}_Monetary policy or key interest rate_4QMA"].std()
-    )
+    cb_col = f"{country}_Monetary policy or key interest rate_4QMA"
+    window_df = window_df.sort_values("DATE_OF_FINANCIALS")
+    ir_change = window_df["interest_rate"].diff().dropna()
+    cb_change = window_df[cb_col].diff().dropna()
+    corr = ir_change.corr(cb_change)
+    sensitivity = ir_change.std() / cb_change.std()
     alpha = corr * sensitivity
     return np.clip(alpha, alpha_min, alpha_max)
 
