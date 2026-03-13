@@ -263,12 +263,20 @@ def get_corr_df(data, country, aggregate, id_column_name, alpha_min, alpha_max):
         correlation_df_US = correlation_per_id_US.rename("Correlation_US").reset_index()
         all_df = pd.merge(std_df, correlation_df, on=id_column_name)
         all_df = pd.merge(all_df, correlation_df_US, on=id_column_name)
-        all_df["Alpha"] = (all_df["Correlation"] * all_df["Sensitivity"]).clip(
-            lower=alpha_min, upper=alpha_max
+        huber_alpha = (
+            data.groupby(id_column_name)
+            .apply(lambda g: _huber_alpha(g[cb_change_col], g["interest_rate_change"], alpha_min, alpha_max))
+            .rename("Alpha")
+            .reset_index()
         )
-        all_df["Alpha_US"] = (
-            all_df["Correlation_US"] * all_df["Sensitivity_US"]
-        ).clip(lower=alpha_min, upper=alpha_max)
+        huber_alpha_us = (
+            data.groupby(id_column_name)
+            .apply(lambda g: _huber_alpha(g["US_rate_change"], g["interest_rate_change"], alpha_min, alpha_max))
+            .rename("Alpha_US")
+            .reset_index()
+        )
+        all_df = all_df.merge(huber_alpha, on=id_column_name)
+        all_df = all_df.merge(huber_alpha_us, on=id_column_name)
     else:
         correlation_agg = data["interest_rate_change"].corr(data[cb_change_col])
         correlation_agg_US = data["interest_rate_change"].corr(data["US_rate_change"])
@@ -277,12 +285,8 @@ def get_corr_df(data, country, aggregate, id_column_name, alpha_min, alpha_max):
         std_df["Correlation_US"] = correlation_agg_US
 
         all_df = pd.DataFrame([std_df])
-        all_df["Alpha"] = (all_df["Correlation"] * all_df["Sensitivity"]).clip(
-            lower=alpha_min, upper=alpha_max
-        )
-        all_df["Alpha_US"] = (
-            all_df["Correlation_US"] * all_df["Sensitivity_US"]
-        ).clip(lower=alpha_min, upper=alpha_max)
+        all_df["Alpha"] = _huber_alpha(data[cb_change_col], data["interest_rate_change"], alpha_min, alpha_max)
+        all_df["Alpha_US"] = _huber_alpha(data["US_rate_change"], data["interest_rate_change"], alpha_min, alpha_max)
 
     all_df = all_df.rename(
         columns={
@@ -295,21 +299,36 @@ def get_corr_df(data, country, aggregate, id_column_name, alpha_min, alpha_max):
     return all_df
 
 
+def _huber_alpha(x: pd.Series, y: pd.Series, alpha_min: float, alpha_max: float) -> float:
+    """Fit a no-intercept Huber regression of y on x and return the clipped slope.
+
+    Huber regression down-weights large residuals, making the slope estimate more
+    robust to outliers than OLS / Correlation × Sensitivity.
+    """
+    from sklearn.linear_model import HuberRegressor
+
+    mask = x.notna() & y.notna()
+    x, y = x[mask], y[mask]
+    if len(x) < 2:
+        return np.nan
+    model = HuberRegressor(fit_intercept=False, epsilon=1.35, max_iter=200)
+    model.fit(x.values.reshape(-1, 1), y.values)
+    return float(np.clip(model.coef_[0], alpha_min, alpha_max))
+
+
 def compute_alpha(window_df, country, alpha_min, alpha_max):
     """Compute the Alpha parameter for a given data window and country.
 
-    Alpha = Correlation(entity_rate_change, central_bank_rate_change) x Sensitivity,
-    clipped to [alpha_min, alpha_max]. Sensitivity and Correlation are computed on
-    period-over-period changes in interest rates rather than levels.
+    Alpha is the slope from a Huber regression of entity interest rate changes on
+    central bank rate changes, clipped to [alpha_min, alpha_max]. Using Huber
+    regression (instead of OLS / Correlation × Sensitivity) makes the estimate
+    robust to outliers common in interest-rate time series.
     """
     cb_col = f"{country}_Monetary policy or key interest rate_4QMA"
     window_df = window_df.sort_values("DATE_OF_FINANCIALS")
     ir_change = window_df["interest_rate"].diff().dropna()
     cb_change = window_df[cb_col].diff().dropna()
-    corr = ir_change.corr(cb_change)
-    sensitivity = ir_change.std() / cb_change.std()
-    alpha = corr * sensitivity
-    return np.clip(alpha, alpha_min, alpha_max)
+    return _huber_alpha(cb_change, ir_change, alpha_min, alpha_max)
 
 
 def interest_expense(
