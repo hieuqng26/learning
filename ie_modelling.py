@@ -2,8 +2,6 @@ import pandas as pd
 import numpy as np
 from datetime import datetime
 
-from ie_data_processing import process_data_country_sector
-
 
 # ============================================================================
 # MODELLING HELPERS
@@ -252,9 +250,11 @@ def split_portfolio(data, portfolio, both_level_df, top_countries):
 # ============================================================================
 
 
-def run_modelling(interest_data, agg_interest_data, MEVdata, int_expense_issue, IE_config):
+def run_modelling(processed_data, IE_config):
     """Run entity-level Alpha computation, country/portfolio aggregation, and output formatting.
 
+    processed_data: dict keyed by country with pre-processed 'id' and 'agg' DataFrames
+                    (produced by load_and_clean_data).
     Returns a dict with all modelling outputs needed by downstream steps.
     """
     sector = IE_config.sector
@@ -293,21 +293,13 @@ def run_modelling(interest_data, agg_interest_data, MEVdata, int_expense_issue, 
         ]
     )
 
-    for country in interest_data.country_of_risk.unique():
-        id_processed = process_data_country_sector(
-            interest_data, MEVdata, country, sector, aggregate=False,
-            id_column_name=id_column_name, int_expense_issue=int_expense_issue,
-        )
-        agg_processed = process_data_country_sector(
-            agg_interest_data, MEVdata, country, sector, aggregate=True,
-            id_column_name=id_column_name, int_expense_issue=int_expense_issue,
-        )
+    for country, country_data in processed_data.items():
         id_data = interest_expense(
-            id_processed, country, aggregate=False,
+            country_data["id"], country, aggregate=False,
             id_column_name=id_column_name, alpha_min=alpha_min, alpha_max=alpha_max,
         )
         agg_data = interest_expense(
-            agg_processed, country, aggregate=True,
+            country_data["agg"], country, aggregate=True,
             id_column_name=id_column_name, alpha_min=alpha_min, alpha_max=alpha_max,
         )
         if len(id_data) > 0:

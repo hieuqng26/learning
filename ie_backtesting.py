@@ -3,7 +3,6 @@ import numpy as np
 import statsmodels.api as sm
 from sklearn.metrics import mean_absolute_error, mean_squared_error
 
-from ie_data_processing import process_data_country_sector
 from ie_modelling import compute_alpha
 
 
@@ -48,15 +47,16 @@ def cal_country_stats_with_r2(data):
 # ============================================================================
 
 
-def run_backtesting(interest_data, agg_interest_data, MEVdata, modelling_results, int_expense_issue, IE_config):
+def run_backtesting(processed_data, modelling_results, IE_config):
     """Run entity- and aggregate-level backtesting with rolling or full-history alpha.
 
+    processed_data: dict keyed by country with pre-processed 'id' and 'agg' DataFrames
+                    (produced by load_and_clean_data).
     Returns:
         id_alpha_ts_df: entity-level backtest results with metrics
         agg_alpha_ts_df: aggregate-level backtest results with metrics
         summary_ts_df: summary-level backtest results with metrics
     """
-    sector = IE_config.sector
     id_column_name = IE_config.id_column_name
     alpha_min = IE_config.alpha_min
     alpha_max = IE_config.alpha_max
@@ -71,15 +71,9 @@ def run_backtesting(interest_data, agg_interest_data, MEVdata, modelling_results
     agg_bt_rows = []
     summary_bt_rows = []
 
-    for country in interest_data.country_of_risk.unique():
-        agg_data = process_data_country_sector(
-            agg_interest_data, MEVdata, country, sector, aggregate=True,
-            id_column_name=id_column_name, int_expense_issue=int_expense_issue,
-        )
-        id_data = process_data_country_sector(
-            interest_data, MEVdata, country, sector, aggregate=False,
-            id_column_name=id_column_name, int_expense_issue=int_expense_issue,
-        )
+    for country, country_data in processed_data.items():
+        agg_data = country_data["agg"]
+        id_data = country_data["id"]
 
         # LEID-level: compute future changes
         id_data = id_data.sort_values(["spread_id", "DATE_OF_FINANCIALS"])

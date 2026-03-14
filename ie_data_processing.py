@@ -386,4 +386,18 @@ def load_and_clean_data(IE_config):
         summary_8,
     ]
 
-    return interest_data, agg_interest_data, summary_steps, MEVdata, interest_data_df, int_expense_issue
+    # --- Pre-process per-country data for modelling and backtesting ---
+    processed_data = {}
+    for country in interest_data.country_of_risk.unique():
+        processed_data[country] = {
+            "id": process_data_country_sector(
+                interest_data, MEVdata, country, sector, aggregate=False,
+                id_column_name=id_column_name, int_expense_issue=int_expense_issue,
+            ),
+            "agg": process_data_country_sector(
+                agg_interest_data, MEVdata, country, sector, aggregate=True,
+                id_column_name=id_column_name, int_expense_issue=int_expense_issue,
+            ),
+        }
+
+    return interest_data, agg_interest_data, summary_steps, MEVdata, interest_data_df, int_expense_issue, processed_data
