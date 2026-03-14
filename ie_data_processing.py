@@ -60,32 +60,6 @@ def MEV_data_processing(country, MEVdata):
     return MEVdata_interest_rate
 
 
-def MEV_data_processing_before2018(country, MEVdata):
-    """Return the 4-quarter moving average of the central bank rate for `country` before 2018."""
-    MEVdata_interest_rate = MEVdata[
-        ["Date", f"{country}_Monetary policy or key interest rate"]
-    ].copy()
-    MEVdata_interest_rate = MEVdata_interest_rate[
-        MEVdata_interest_rate["Date"] < "2018-01-01"
-    ]
-    MEVdata_interest_rate["Date"] = pd.to_datetime(
-        MEVdata_interest_rate["Date"], format="%Y-%m-%d"
-    )
-    MEVdata_interest_rate["Year"] = MEVdata_interest_rate["Date"].apply(
-        lambda x: x.year
-    )
-    MEVdata_interest_rate[
-        f"{country}_Monetary policy or key interest rate_4QMA"
-    ] = (
-        MEVdata_interest_rate[f"{country}_Monetary policy or key interest rate"]
-        .rolling(window=4)
-        .mean()
-        / 100
-    )
-
-    return MEVdata_interest_rate
-
-
 def process_data_country_sector(
     interest_data,
     MEVdata,

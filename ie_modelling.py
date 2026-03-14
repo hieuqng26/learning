@@ -127,25 +127,13 @@ def compute_alpha(window_df, country, alpha_min, alpha_max):
     return np.clip(alpha, alpha_min, alpha_max)
 
 
-def interest_expense(
-    interest_data,
-    MEVdata,
-    country,
-    sector,
-    aggregate,
-    id_column_name,
-    alpha_min,
-    alpha_max,
-    int_expense_issue,
-):
+def interest_expense(data, country, aggregate, id_column_name, alpha_min, alpha_max):
     """Run the interest expense model for a single country.
 
-    Processes data, computes correlation/sensitivity/Alpha, and attaches portfolio labels.
+    Expects pre-processed data from process_data_country_sector.
+    Computes correlation/sensitivity/Alpha and attaches portfolio labels.
     Returns an empty DataFrame if no data is available for the country.
     """
-    data = process_data_country_sector(
-        interest_data, MEVdata, country, sector, aggregate, id_column_name, int_expense_issue
-    )
     if len(data) == 0:
         final = pd.DataFrame()
     else:
@@ -153,7 +141,7 @@ def interest_expense(
 
         if not aggregate:
             final = final.merge(
-                interest_data[["spread_id", "Portfolio"]],
+                data[["spread_id", "Portfolio"]],
                 on="spread_id",
                 how="left",
             )
@@ -306,15 +294,21 @@ def run_modelling(interest_data, agg_interest_data, MEVdata, int_expense_issue, 
     )
 
     for country in interest_data.country_of_risk.unique():
+        id_processed = process_data_country_sector(
+            interest_data, MEVdata, country, sector, aggregate=False,
+            id_column_name=id_column_name, int_expense_issue=int_expense_issue,
+        )
+        agg_processed = process_data_country_sector(
+            agg_interest_data, MEVdata, country, sector, aggregate=True,
+            id_column_name=id_column_name, int_expense_issue=int_expense_issue,
+        )
         id_data = interest_expense(
-            interest_data, MEVdata, country, sector=sector, aggregate=False,
+            id_processed, country, aggregate=False,
             id_column_name=id_column_name, alpha_min=alpha_min, alpha_max=alpha_max,
-            int_expense_issue=int_expense_issue,
         )
         agg_data = interest_expense(
-            agg_interest_data, MEVdata, country, sector=sector, aggregate=True,
+            agg_processed, country, aggregate=True,
             id_column_name=id_column_name, alpha_min=alpha_min, alpha_max=alpha_max,
-            int_expense_issue=int_expense_issue,
         )
         if len(id_data) > 0:
             all_country_frame = pd.concat(
