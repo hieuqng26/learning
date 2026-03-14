@@ -387,17 +387,23 @@ def load_and_clean_data(IE_config):
     ]
 
     # --- Pre-process per-country data for modelling and backtesting ---
-    processed_data = {}
+    id_frames = []
+    agg_frames = []
     for country in interest_data.country_of_risk.unique():
-        processed_data[country] = {
-            "id": process_data_country_sector(
-                interest_data, MEVdata, country, sector, aggregate=False,
-                id_column_name=id_column_name, int_expense_issue=int_expense_issue,
-            ),
-            "agg": process_data_country_sector(
-                agg_interest_data, MEVdata, country, sector, aggregate=True,
-                id_column_name=id_column_name, int_expense_issue=int_expense_issue,
-            ),
-        }
+        id_frame = process_data_country_sector(
+            interest_data, MEVdata, country, sector, aggregate=False,
+            id_column_name=id_column_name, int_expense_issue=int_expense_issue,
+        )
+        agg_frame = process_data_country_sector(
+            agg_interest_data, MEVdata, country, sector, aggregate=True,
+            id_column_name=id_column_name, int_expense_issue=int_expense_issue,
+        )
+        if len(id_frame) > 0:
+            id_frames.append(id_frame)
+        if len(agg_frame) > 0:
+            agg_frames.append(agg_frame)
 
-    return interest_data, agg_interest_data, summary_steps, MEVdata, interest_data_df, int_expense_issue, processed_data
+    processed_id = pd.concat(id_frames, ignore_index=True) if id_frames else pd.DataFrame()
+    processed_agg = pd.concat(agg_frames, ignore_index=True) if agg_frames else pd.DataFrame()
+
+    return interest_data, agg_interest_data, summary_steps, MEVdata, interest_data_df, int_expense_issue, processed_id, processed_agg

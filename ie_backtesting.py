@@ -47,11 +47,11 @@ def cal_country_stats_with_r2(data):
 # ============================================================================
 
 
-def run_backtesting(processed_data, modelling_results, IE_config):
+def run_backtesting(processed_id, processed_agg, modelling_results, IE_config):
     """Run entity- and aggregate-level backtesting with rolling or full-history alpha.
 
-    processed_data: dict keyed by country with pre-processed 'id' and 'agg' DataFrames
-                    (produced by load_and_clean_data).
+    processed_id: concatenated entity-level DataFrame from load_and_clean_data.
+    processed_agg: concatenated aggregate-level DataFrame from load_and_clean_data.
     Returns:
         id_alpha_ts_df: entity-level backtest results with metrics
         agg_alpha_ts_df: aggregate-level backtest results with metrics
@@ -71,9 +71,8 @@ def run_backtesting(processed_data, modelling_results, IE_config):
     agg_bt_rows = []
     summary_bt_rows = []
 
-    for country, country_data in processed_data.items():
-        agg_data = country_data["agg"]
-        id_data = country_data["id"]
+    for country, id_data in processed_id.groupby("country_of_risk"):
+        agg_data = processed_agg[processed_agg["country_of_risk"] == country]
 
         # LEID-level: compute future changes
         id_data = id_data.sort_values(["spread_id", "DATE_OF_FINANCIALS"])

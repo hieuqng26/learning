@@ -33,15 +33,15 @@ def interest_expense_run(sector_name):
     )
 
     # --- Data processing ---
-    interest_data, agg_interest_data, summary_steps, MEVdata, interest_data_df, int_expense_issue, processed_data = (
+    interest_data, agg_interest_data, summary_steps, MEVdata, interest_data_df, int_expense_issue, processed_id, processed_agg = (
         load_and_clean_data(IE_config)
     )
 
     # --- Modelling ---
-    modelling_results = run_modelling(processed_data, IE_config)
+    modelling_results = run_modelling(processed_id, processed_agg, IE_config)
 
     # --- Backtesting ---
-    backtest_results = run_backtesting(processed_data, modelling_results, IE_config)
+    backtest_results = run_backtesting(processed_id, processed_agg, modelling_results, IE_config)
 
     # --- Output ---
     write_outputs(

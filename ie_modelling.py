@@ -250,11 +250,11 @@ def split_portfolio(data, portfolio, both_level_df, top_countries):
 # ============================================================================
 
 
-def run_modelling(processed_data, IE_config):
+def run_modelling(processed_id, processed_agg, IE_config):
     """Run entity-level Alpha computation, country/portfolio aggregation, and output formatting.
 
-    processed_data: dict keyed by country with pre-processed 'id' and 'agg' DataFrames
-                    (produced by load_and_clean_data).
+    processed_id: concatenated entity-level DataFrame from load_and_clean_data.
+    processed_agg: concatenated aggregate-level DataFrame from load_and_clean_data.
     Returns a dict with all modelling outputs needed by downstream steps.
     """
     sector = IE_config.sector
@@ -293,13 +293,14 @@ def run_modelling(processed_data, IE_config):
         ]
     )
 
-    for country, country_data in processed_data.items():
+    for country, id_group in processed_id.groupby("country_of_risk"):
+        agg_group = processed_agg[processed_agg["country_of_risk"] == country]
         id_data = interest_expense(
-            country_data["id"], country, aggregate=False,
+            id_group, country, aggregate=False,
             id_column_name=id_column_name, alpha_min=alpha_min, alpha_max=alpha_max,
         )
         agg_data = interest_expense(
-            country_data["agg"], country, aggregate=True,
+            agg_group, country, aggregate=True,
             id_column_name=id_column_name, alpha_min=alpha_min, alpha_max=alpha_max,
         )
         if len(id_data) > 0:
