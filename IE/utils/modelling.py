@@ -1,6 +1,7 @@
 import pandas as pd
 import numpy as np
 from datetime import datetime
+import statsmodels.api as sm
 
 
 # ============================================================================
@@ -55,6 +56,17 @@ def get_corr_df(data, country, aggregate, id_column_name, alpha_min, alpha_max):
         )
         std_df = std_df.to_dict()
 
+    def _ols_alpha(x, cb_col):
+        """OLS slope of Δinterest_rate ~ Δcb_rate (no intercept), clipped."""
+        df = x[["interest_rate", cb_col]].dropna()
+        d_entity = df["interest_rate"].diff().dropna().values
+        d_cb = df[cb_col].diff().dropna().values
+        n = min(len(d_entity), len(d_cb))
+        if n < 2:
+            return 0.0
+        result = sm.OLS(d_entity[:n], d_cb[:n]).fit()
+        return np.clip(result.params[0], alpha_min, alpha_max)
+
     if not aggregate:
         correlation_per_id = data.groupby(id_column_name).apply(
             lambda x: x["interest_rate"].corr(
@@ -68,16 +80,22 @@ def get_corr_df(data, country, aggregate, id_column_name, alpha_min, alpha_max):
             )
         )
 
+        ols_alpha_per_id = data.groupby(id_column_name).apply(
+            lambda x: _ols_alpha(x, f"{country}_Monetary policy or key interest rate_4QMA")
+        )
+        ols_alpha_us_per_id = data.groupby(id_column_name).apply(
+            lambda x: _ols_alpha(x, "Monetary policy or key interest rate_4QMA_US")
+        )
+
         correlation_df = correlation_per_id.rename("Correlation").reset_index()
         correlation_df_US = correlation_per_id_US.rename("Correlation_US").reset_index()
+        ols_alpha_df = ols_alpha_per_id.rename("Alpha").reset_index()
+        ols_alpha_us_df = ols_alpha_us_per_id.rename("Alpha_US").reset_index()
+
         all_df = pd.merge(std_df, correlation_df, on=id_column_name)
         all_df = pd.merge(all_df, correlation_df_US, on=id_column_name)
-        all_df["Alpha"] = (all_df["Correlation"] * all_df["Sensitivity"]).clip(
-            lower=alpha_min, upper=alpha_max
-        )
-        all_df["Alpha_US"] = (
-            all_df["Correlation_US"] * all_df["Sensitivity_US"]
-        ).clip(lower=alpha_min, upper=alpha_max)
+        all_df = pd.merge(all_df, ols_alpha_df, on=id_column_name)
+        all_df = pd.merge(all_df, ols_alpha_us_df, on=id_column_name)
     else:
         correlation_agg = data["interest_rate"].corr(
             data[f"{country}_Monetary policy or key interest rate_4QMA"]
@@ -88,14 +106,10 @@ def get_corr_df(data, country, aggregate, id_column_name, alpha_min, alpha_max):
 
         std_df["Correlation"] = correlation_agg
         std_df["Correlation_US"] = correlation_agg_US
+        std_df["Alpha"] = _ols_alpha(data, f"{country}_Monetary policy or key interest rate_4QMA")
+        std_df["Alpha_US"] = _ols_alpha(data, "Monetary policy or key interest rate_4QMA_US")
 
         all_df = pd.DataFrame([std_df])
-        all_df["Alpha"] = (all_df["Correlation"] * all_df["Sensitivity"]).clip(
-            lower=alpha_min, upper=alpha_max
-        )
-        all_df["Alpha_US"] = (
-            all_df["Correlation_US"] * all_df["Sensitivity_US"]
-        ).clip(lower=alpha_min, upper=alpha_max)
 
     all_df = all_df.rename(
         columns={
@@ -109,19 +123,28 @@ def get_corr_df(data, country, aggregate, id_column_name, alpha_min, alpha_max):
 
 
 def compute_alpha(window_df, country, alpha_min, alpha_max):
-    """Compute the Alpha parameter for a given data window and country.
+    """Compute Alpha as the OLS slope of Δinterest_rate ~ Δcb_rate (no intercept).
 
-    Alpha = Correlation(entity_rate, central_bank_rate) x Sensitivity,
-    clipped to [alpha_min, alpha_max].
+    Fits OLS on first differences so the estimation objective matches the
+    backtesting target (predicting period-over-period interest rate changes).
+    Prints the in-sample R² of the fit.
+    Alpha is clipped to [alpha_min, alpha_max].
     """
-    corr = window_df["interest_rate"].corr(
-        window_df[f"{country}_Monetary policy or key interest rate_4QMA"]
-    )
-    sensitivity = (
-        window_df["interest_rate"].std()
-        / window_df[f"{country}_Monetary policy or key interest rate_4QMA"].std()
-    )
-    alpha = corr * sensitivity
+    cb_col = f"{country}_Monetary policy or key interest rate_4QMA"
+    df = window_df[["interest_rate", cb_col]].dropna()
+
+    d_entity = df["interest_rate"].diff().dropna().values
+    d_cb = df[cb_col].diff().dropna().values
+    n = min(len(d_entity), len(d_cb))
+
+    if n < 2:
+        return np.clip(0.0, alpha_min, alpha_max)
+
+    result = sm.OLS(d_entity[:n], d_cb[:n]).fit()
+    alpha = result.params[0]
+
+    print(f"[OLS Alpha] country={country}, n={n}, R²={result.rsquared:.4f}, alpha={alpha:.4f}")
+
     return np.clip(alpha, alpha_min, alpha_max)
 
 
