@@ -57,7 +57,6 @@ def run_backtesting(processed_id, processed_agg, modelling_results, IE_config):
         agg_alpha_ts_df: aggregate-level backtest results with metrics
         summary_ts_df: summary-level backtest results with metrics
     """
-    id_column_name = IE_config.id_column_name
     alpha_min = IE_config.alpha_min
     alpha_max = IE_config.alpha_max
     applyWindow = IE_config.applyWindow
