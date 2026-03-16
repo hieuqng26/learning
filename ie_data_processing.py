@@ -406,4 +406,4 @@ def load_and_clean_data(IE_config):
     processed_id = pd.concat(id_frames, ignore_index=True) if id_frames else pd.DataFrame()
     processed_agg = pd.concat(agg_frames, ignore_index=True) if agg_frames else pd.DataFrame()
 
-    return interest_data, agg_interest_data, summary_steps, MEVdata, interest_data_df, int_expense_issue, processed_id, processed_agg
+    return (summary_steps, interest_data_df, int_expense_issue, processed_id, processed_agg)
