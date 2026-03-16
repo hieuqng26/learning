@@ -373,7 +373,7 @@ def load_and_clean_data(IE_config):
         )
         .reset_index()
     )
-    agg_interest_data.dropna()
+    agg_interest_data.dropna(inplace=True)
 
     summary_steps = [
         summary_1,

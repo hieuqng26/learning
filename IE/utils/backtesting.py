@@ -42,6 +42,60 @@ def cal_country_stats_with_r2(data):
     )
 
 
+def _add_backtest_metrics(df):
+    """Add rank_ic, MSE, MAE, and R2 columns to a backtest results DataFrame."""
+    df["rank_ic"] = df["pred_change"].corr(df["actual_change"], method="spearman")
+    df["MSE"] = (df["pred_change"] - df["actual_change"]) ** 2
+    df["MAE"] = (df["pred_change"] - df["actual_change"]).abs()
+    rss = ((df["actual_change"] - df["pred_change"]) ** 2).sum()
+    tss = ((df["actual_change"] - df["actual_change"].mean()) ** 2).sum()
+    df["R2"] = 1 - rss / tss
+    return df
+
+
+def _build_summary_rows(agg_data, country, summary_alpha):
+    """Build summary-level backtest rows using a pre-computed summary alpha."""
+    rows = []
+    for i in range(len(agg_data)):
+        actual_mev_diff = agg_data.iloc[i]["MEV_diff"]
+        rows.append(
+            {
+                "Country": country,
+                "date": agg_data.iloc[i]["DATE_OF_FINANCIALS"],
+                "Alpha": summary_alpha,
+                "pred_change": summary_alpha * actual_mev_diff,
+                "actual_change": agg_data.iloc[i]["future_interest_change"],
+            }
+        )
+    return rows
+
+
+def _get_summary_alpha(country, summary_testing, globalmodel, country_group_mapping):
+    """Look up the summary alpha for a country based on model type."""
+    if globalmodel:
+        regional_country_list = []
+        for key, values in country_group_mapping.items():
+            regional_country_list = list(set(regional_country_list + values))
+            if country in regional_country_list:
+                for key, values in country_group_mapping.items():
+                    if country in values:
+                        return summary_testing[
+                            summary_testing["Country"] == key
+                        ]["Alpha"].values[0]
+        return summary_testing[
+            summary_testing["Country"] == "All countries average"
+        ]["Alpha"].values[0]
+    else:
+        if country in summary_testing["Country"].values:
+            return summary_testing[
+                summary_testing["Country"] == country
+            ]["Alpha"].values[0]
+        else:
+            return summary_testing[
+                summary_testing["Country"] == "Others"
+            ]["Alpha"].values[0]
+
+
 # ============================================================================
 # MAIN BACKTESTING PIPELINE
 # ============================================================================
@@ -129,44 +183,9 @@ def run_backtesting(processed_id, processed_agg, modelling_results, IE_config):
                     }
                 )
 
-            if globalmodel:
-                regional_country_list = []
-                for key, values in country_group_mapping.items():
-                    regional_country_list = list(set(regional_country_list + values))
-                    if country in regional_country_list:
-                        for key, values in country_group_mapping.items():
-                            if country in values:
-                                summary_alpha = summary_testing[
-                                    summary_testing["Country"] == key
-                                ]["Alpha"].values[0]
-                    else:
-                        summary_alpha = summary_testing[
-                            summary_testing["Country"] == "All countries average"
-                        ]["Alpha"].values[0]
-            else:
-                if country in summary_testing["Country"].values:
-                    summary_alpha = summary_testing[
-                        summary_testing["Country"] == country
-                    ]["Alpha"].values[0]
-                else:
-                    summary_alpha = summary_testing[
-                        summary_testing["Country"] == "Others"
-                    ]["Alpha"].values[0]
-
-            for i in range(len(agg_data)):
-                window = agg_data
-                alpha = compute_alpha(window, country, alpha_min, alpha_max)
-                actual_mev_diff = agg_data.iloc[i]["MEV_diff"]
-                pred_interest_change = alpha * actual_mev_diff
-                summary_bt_rows.append(
-                    {
-                        "Country": country,
-                        "date": agg_data.iloc[i]["DATE_OF_FINANCIALS"],
-                        "Alpha": summary_alpha,
-                        "pred_change": pred_interest_change,
-                        "actual_change": agg_data.iloc[i]["future_interest_change"],
-                    }
-                )
+            summary_alpha = _get_summary_alpha(
+                country, summary_testing, globalmodel, country_group_mapping
+            )
 
         else:
             # Rolling-window backtesting: use WINDOW most recent years to compute alpha
@@ -204,87 +223,14 @@ def run_backtesting(processed_id, processed_agg, modelling_results, IE_config):
                     }
                 )
 
-            if country in summary_testing["Country"].values:
-                summary_alpha = summary_testing[
-                    summary_testing["Country"] == country
-                ]["Alpha"].values[0]
-            else:
-                summary_alpha = summary_testing[
-                    summary_testing["Country"] == "Others"
-                ]["Alpha"].values[0]
+            summary_alpha = _get_summary_alpha(
+                country, summary_testing, globalmodel=False, country_group_mapping=None
+            )
 
-            for i in range(len(agg_data)):
-                actual_mev_diff = agg_data.iloc[i]["MEV_diff"]
-                pred_interest_change = summary_alpha * actual_mev_diff
-                summary_bt_rows.append(
-                    {
-                        "Country": country,
-                        "date": agg_data.iloc[i]["DATE_OF_FINANCIALS"],
-                        "Alpha": summary_alpha,
-                        "pred_change": pred_interest_change,
-                        "actual_change": agg_data.iloc[i]["future_interest_change"],
-                    }
-                )
+        summary_bt_rows.extend(_build_summary_rows(agg_data, country, summary_alpha))
 
-    id_alpha_ts_df = pd.DataFrame(id_bt_rows).dropna()
-    agg_alpha_ts_df = pd.DataFrame(agg_bt_rows).dropna()
-    summary_ts_df = pd.DataFrame(summary_bt_rows).dropna()
-
-    # --- Entity-level backtest metrics ---
-    id_rank_ic = id_alpha_ts_df["pred_change"].corr(
-        id_alpha_ts_df["actual_change"], method="spearman"
-    )
-    id_alpha_ts_df["rank_ic"] = id_rank_ic
-    id_alpha_ts_df["MSE"] = (
-        id_alpha_ts_df["pred_change"] - id_alpha_ts_df["actual_change"]
-    ) ** 2
-    id_alpha_ts_df["MAE"] = (
-        id_alpha_ts_df["pred_change"] - id_alpha_ts_df["actual_change"]
-    ).abs()
-    rss_id = (
-        (id_alpha_ts_df["actual_change"] - id_alpha_ts_df["pred_change"]) ** 2
-    ).sum()
-    tss_id = (
-        (id_alpha_ts_df["actual_change"] - id_alpha_ts_df["actual_change"].mean()) ** 2
-    ).sum()
-    id_alpha_ts_df["R2"] = 1 - rss_id / tss_id
-
-    # --- Aggregated backtest metrics ---
-    agg_rank_ic = agg_alpha_ts_df["pred_change"].corr(
-        agg_alpha_ts_df["actual_change"], method="spearman"
-    )
-    agg_alpha_ts_df["rank_ic"] = agg_rank_ic
-    agg_alpha_ts_df["MSE"] = (
-        agg_alpha_ts_df["pred_change"] - agg_alpha_ts_df["actual_change"]
-    ) ** 2
-    agg_alpha_ts_df["MAE"] = (
-        agg_alpha_ts_df["pred_change"] - agg_alpha_ts_df["actual_change"]
-    ).abs()
-    rss_agg = (
-        (agg_alpha_ts_df["actual_change"] - agg_alpha_ts_df["pred_change"]) ** 2
-    ).sum()
-    tss_agg = (
-        (agg_alpha_ts_df["actual_change"] - agg_alpha_ts_df["actual_change"].mean()) ** 2
-    ).sum()
-    agg_alpha_ts_df["R2"] = 1 - rss_agg / tss_agg
-
-    # --- Summary-level backtest metrics ---
-    rank_ic = summary_ts_df["pred_change"].corr(
-        summary_ts_df["actual_change"], method="spearman"
-    )
-    summary_ts_df["rank_ic"] = rank_ic
-    summary_ts_df["MSE"] = (
-        summary_ts_df["pred_change"] - summary_ts_df["actual_change"]
-    ) ** 2
-    summary_ts_df["MAE"] = (
-        summary_ts_df["pred_change"] - summary_ts_df["actual_change"]
-    ).abs()
-    rss = (
-        (summary_ts_df["actual_change"] - summary_ts_df["pred_change"]) ** 2
-    ).sum()
-    tss = (
-        (summary_ts_df["actual_change"] - summary_ts_df["actual_change"].mean()) ** 2
-    ).sum()
-    summary_ts_df["R2"] = 1 - rss / tss
+    id_alpha_ts_df = _add_backtest_metrics(pd.DataFrame(id_bt_rows).dropna())
+    agg_alpha_ts_df = _add_backtest_metrics(pd.DataFrame(agg_bt_rows).dropna())
+    summary_ts_df = _add_backtest_metrics(pd.DataFrame(summary_bt_rows).dropna())
 
     return id_alpha_ts_df, agg_alpha_ts_df, summary_ts_df
