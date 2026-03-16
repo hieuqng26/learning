@@ -33,7 +33,7 @@ def interest_expense_run(sector_name):
     )
 
     # --- Data processing ---
-    interest_data, agg_interest_data, summary_steps, MEVdata, interest_data_df, int_expense_issue, processed_id, processed_agg = (
+    summary_steps, interest_data_df, int_expense_issue, processed_id, processed_agg = (
         load_and_clean_data(IE_config)
     )
 
@@ -52,7 +52,7 @@ def interest_expense_run(sector_name):
 if __name__ == "__main__":
     sys.stdout = TimestampLog("IE_master")
     for sector in [
-        "O&G",
+        # "O&G",
         # "Commodity Traders",
         # "Metals & Mining",
         # "Automobiles & Components",
