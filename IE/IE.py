@@ -6,10 +6,10 @@ warnings.filterwarnings("ignore")
 from log_file import TimestampLog
 from IE_config import *
 
-from ie_data_processing import load_and_clean_data
-from ie_modelling import run_modelling
-from ie_backtesting import run_backtesting
-from ie_output import write_outputs
+from utils.data_processing import load_and_clean_data
+from utils.modelling import run_modelling
+from utils.backtesting import run_backtesting
+from utils.output import write_outputs
 
 OUT_DIR = r"C:\Users\1643986\repo\50991-risk-portfolio-analytics\output"
 

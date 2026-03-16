@@ -3,7 +3,7 @@ import numpy as np
 import statsmodels.api as sm
 from sklearn.metrics import mean_absolute_error, mean_squared_error
 
-from ie_modelling import compute_alpha
+from utils.modelling import compute_alpha
 
 
 # ============================================================================
