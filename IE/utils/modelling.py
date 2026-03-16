@@ -9,7 +9,66 @@ import statsmodels.api as sm
 # ============================================================================
 
 
-def get_corr_df(data, country, aggregate, id_column_name, alpha_min, alpha_max):
+def compute_country_panel_alpha(data, id_col, cb_col, alpha_min, alpha_max, model_type='pooled_fd'):
+    """Fit a panel data model pooling all LEIDs within a country.
+
+    Computes first differences within each entity and pools observations
+    across all LEIDs, giving more data for estimation than per-LEID OLS.
+
+    model_type:
+      'pooled_fd'           – pooled first-difference OLS, no intercept
+      'pooled_fd_intercept' – pooled first-difference OLS with a common intercept
+      'fd_entity_fe'        – first-difference OLS with entity fixed effects
+                              (entity-specific intercepts capture LEID-level drift)
+
+    Returns the clipped slope (alpha) on the CB rate change.
+    """
+    all_d_y, all_d_x, entity_ids = [], [], []
+    for leid, leid_df in data.groupby(id_col):
+        df = leid_df[["interest_rate", cb_col]].dropna()
+        if len(df) < 2:
+            continue
+        d_y = df["interest_rate"].diff().dropna().values
+        d_x = df[cb_col].diff().dropna().values
+        n = min(len(d_y), len(d_x))
+        if n < 1:
+            continue
+        all_d_y.extend(d_y[:n])
+        all_d_x.extend(d_x[:n])
+        entity_ids.extend([leid] * n)
+
+    if len(all_d_y) < 2:
+        return np.clip(0.0, alpha_min, alpha_max)
+
+    d_y_arr = np.array(all_d_y)
+    d_x_arr = np.array(all_d_x)
+
+    if model_type == 'pooled_fd':
+        result = sm.OLS(d_y_arr, d_x_arr).fit()
+        alpha = result.params[0]
+    elif model_type == 'pooled_fd_intercept':
+        X = sm.add_constant(d_x_arr)
+        result = sm.OLS(d_y_arr, X).fit()
+        alpha = result.params[1]
+    elif model_type == 'fd_entity_fe':
+        entity_dummies = pd.get_dummies(entity_ids, drop_first=True).values.astype(float)
+        X = np.column_stack([d_x_arr, entity_dummies])
+        result = sm.OLS(d_y_arr, X).fit()
+        alpha = result.params[0]
+    else:
+        raise ValueError(
+            f"Unknown model_type: {model_type!r}. "
+            "Choose from 'pooled_fd', 'pooled_fd_intercept', 'fd_entity_fe'."
+        )
+
+    print(
+        f"[Panel OLS] cb_col={cb_col!r}, model={model_type}, "
+        f"n_obs={len(d_y_arr)}, R²={result.rsquared:.4f}, alpha={alpha:.4f}"
+    )
+    return np.clip(alpha, alpha_min, alpha_max)
+
+
+def get_corr_df(data, country, aggregate, id_column_name, alpha_min, alpha_max, model_type='pooled_fd'):
     """Compute per-entity (or aggregate) correlation, sensitivity, and Alpha against central bank rate.
 
     Returns a DataFrame with columns including Sensitivity, Correlation, Alpha, and Alpha_US.
@@ -56,16 +115,18 @@ def get_corr_df(data, country, aggregate, id_column_name, alpha_min, alpha_max):
         )
         std_df = std_df.to_dict()
 
-    def _ols_alpha(x, cb_col):
-        """OLS slope of Δinterest_rate ~ Δcb_rate (no intercept), clipped."""
+    def _ols_alpha(x, cb_col, with_intercept=False):
+        """OLS slope of Δinterest_rate ~ Δcb_rate, optionally with intercept, clipped."""
         df = x[["interest_rate", cb_col]].dropna()
         d_entity = df["interest_rate"].diff().dropna().values
         d_cb = df[cb_col].diff().dropna().values
         n = min(len(d_entity), len(d_cb))
         if n < 2:
             return 0.0
-        result = sm.OLS(d_entity[:n], d_cb[:n]).fit()
-        return np.clip(result.params[0], alpha_min, alpha_max)
+        exog = sm.add_constant(d_cb[:n]) if with_intercept else d_cb[:n]
+        result = sm.OLS(d_entity[:n], exog).fit()
+        param_idx = 1 if with_intercept else 0
+        return np.clip(result.params[param_idx], alpha_min, alpha_max)
 
     if not aggregate:
         correlation_per_id = data.groupby(id_column_name).apply(
@@ -80,12 +141,19 @@ def get_corr_df(data, country, aggregate, id_column_name, alpha_min, alpha_max):
             )
         )
 
-        ols_alpha_per_id = data.groupby(id_column_name).apply(
-            lambda x: _ols_alpha(x, f"{country}_Monetary policy or key interest rate_4QMA")
+        cb_col_local = f"{country}_Monetary policy or key interest rate_4QMA"
+        us_col = "Monetary policy or key interest rate_4QMA_US"
+
+        country_alpha = compute_country_panel_alpha(
+            data, id_column_name, cb_col_local, alpha_min, alpha_max, model_type
         )
-        ols_alpha_us_per_id = data.groupby(id_column_name).apply(
-            lambda x: _ols_alpha(x, "Monetary policy or key interest rate_4QMA_US")
+        country_alpha_us = compute_country_panel_alpha(
+            data, id_column_name, us_col, alpha_min, alpha_max, model_type
         )
+
+        # Broadcast the single country-level alpha to every LEID
+        ols_alpha_per_id = data.groupby(id_column_name).apply(lambda x: country_alpha)
+        ols_alpha_us_per_id = data.groupby(id_column_name).apply(lambda x: country_alpha_us)
 
         correlation_df = correlation_per_id.rename("Correlation").reset_index()
         correlation_df_US = correlation_per_id_US.rename("Correlation_US").reset_index()
@@ -106,8 +174,13 @@ def get_corr_df(data, country, aggregate, id_column_name, alpha_min, alpha_max):
 
         std_df["Correlation"] = correlation_agg
         std_df["Correlation_US"] = correlation_agg_US
-        std_df["Alpha"] = _ols_alpha(data, f"{country}_Monetary policy or key interest rate_4QMA")
-        std_df["Alpha_US"] = _ols_alpha(data, "Monetary policy or key interest rate_4QMA_US")
+        with_intercept = model_type == 'pooled_fd_intercept'
+        std_df["Alpha"] = _ols_alpha(
+            data, f"{country}_Monetary policy or key interest rate_4QMA", with_intercept
+        )
+        std_df["Alpha_US"] = _ols_alpha(
+            data, "Monetary policy or key interest rate_4QMA_US", with_intercept
+        )
 
         all_df = pd.DataFrame([std_df])
 
@@ -148,7 +221,7 @@ def compute_alpha(window_df, country, alpha_min, alpha_max):
     return np.clip(alpha, alpha_min, alpha_max)
 
 
-def interest_expense(data, country, aggregate, id_column_name, alpha_min, alpha_max):
+def interest_expense(data, country, aggregate, id_column_name, alpha_min, alpha_max, model_type='pooled_fd'):
     """Run the interest expense model for a single country.
 
     Expects pre-processed data from process_data_country_sector.
@@ -158,7 +231,7 @@ def interest_expense(data, country, aggregate, id_column_name, alpha_min, alpha_
     if len(data) == 0:
         final = pd.DataFrame()
     else:
-        final = get_corr_df(data, country, aggregate, id_column_name, alpha_min, alpha_max)
+        final = get_corr_df(data, country, aggregate, id_column_name, alpha_min, alpha_max, model_type)
 
         if not aggregate:
             final = final.merge(
@@ -288,6 +361,7 @@ def run_modelling(processed_id, processed_agg, IE_config):
     top_countries = IE_config.top_countries
     country_group_mapping = IE_config.country_group_mapping
     globalmodel = IE_config.globalmodel
+    model_type = getattr(IE_config, 'model_type', 'pooled_fd')
 
     all_country_frame = pd.DataFrame(
         columns=[
@@ -321,10 +395,12 @@ def run_modelling(processed_id, processed_agg, IE_config):
         id_data = interest_expense(
             id_group, country, aggregate=False,
             id_column_name=id_column_name, alpha_min=alpha_min, alpha_max=alpha_max,
+            model_type=model_type,
         )
         agg_data = interest_expense(
             agg_group, country, aggregate=True,
             id_column_name=id_column_name, alpha_min=alpha_min, alpha_max=alpha_max,
+            model_type=model_type,
         )
         if len(id_data) > 0:
             all_country_frame = pd.concat(
