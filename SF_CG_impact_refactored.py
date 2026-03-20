@@ -26,7 +26,6 @@ base_path = PROJECT_DIR / "6. Revised model" / "3. SF"
 INPUT_DIR = base_path / "1) Input" / "5) CG"
 OUTPUT_DIR = base_path / "2) Output" / "5) CG" / "test"
 QUAL_FACTOR_INPUT_DIR = INPUT_DIR / "1) Qual Factor"
-# CHARTERER_CG_INPUT_DIR = base_path / "1) Input" / "3) Charterer CG"
 CHARTERER_CG_INPUT_DIR = (
     Path(USER_SPECIFIC_PATH)
     / "04. Deloitte Modelling"
@@ -46,7 +45,6 @@ if DO_OUTPUT_DEBUG_FILE:
 
 outputIndividualFile = False  # False means only concatenated tables is saved
 
-# beta_file   = "Stress testing input(optim_all_70_affine_skip).xlsx"
 beta_file = "Stress testing input(optim_all_60_affine_skip).xlsx"
 
 AVG_COUNTRIES = list(GDP_FX_WEIGHTED_AVE.keys())
@@ -95,6 +93,24 @@ def clean_column_names(df):
     return df.rename(
         columns=lambda c: c.strip().lower().replace(" ", "_").replace(".", "")
     )
+
+
+def ensure_mev_col(df):
+    """Ensure the DataFrame has a column named exactly 'Mev'; rename if cased differently."""
+    for c in df.columns:
+        if c.strip().lower() == "mev":
+            if c != "Mev":
+                df.rename(columns={c: "Mev"}, inplace=True)
+            return
+    raise KeyError("Couldn't find 'Mev' column.")
+
+
+def pick_value_col(df, timepoint):
+    """Return the name of the MEV value column for the given timepoint."""
+    for cand in [f"mev_value_{timepoint}", "mev_value", f"value_{timepoint}", "value"]:
+        if cand in df.columns:
+            return cand
+    raise KeyError("Couldn't find a MEV value column.")
 
 
 def pd_lookup_cg(pd_series, lk):
@@ -330,7 +346,7 @@ def output_summary_table(
     file_postfix,
     impact_indicator_name,
     category_name,
-    outputIndividualFile,
+    output_individual_file,
 ):
     df = df_input.copy()
     # export summary table
@@ -381,7 +397,7 @@ def output_summary_table(
     ordered_col = ["Impact_Indicator_name"] + [c for c in col_order if c in new_cols]
     df_impact = df_impact[ordered_col]
 
-    if outputIndividualFile:
+    if output_individual_file:
         out_path3 = OUTPUT_DIR / f"{scenario_name}_{TIMEPOINT}_{file_postfix}.xlsx"
         with pd.ExcelWriter(out_path3, engine="xlsxwriter") as writer:
             df_impact_key.to_excel(writer, sheet_name="KeyTable", index=False)
@@ -573,26 +589,12 @@ def load_and_transform_mev(scenario_file, beta_file_path, timepoint, avg_countri
     df_avg["transformation_list"] = df_avg["transformation_list"].astype("str")
 
     # Ensure 'Mev' column exists in both
-    def ensure_mev_col(df):
-        for c in df.columns:
-            if c.strip().lower() == "mev":
-                if c != "Mev":
-                    df.rename(columns={c: "Mev"}, inplace=True)
-                return
-        raise KeyError("Couldn't find 'Mev' column.")
-
     ensure_mev_col(df_full)
     ensure_mev_col(df_avg)
 
     # Identify value columns
-    def pick_value_col(df):
-        for cand in [f"mev_value_{timepoint}", "mev_value", f"value_{timepoint}", "value"]:
-            if cand in df.columns:
-                return cand
-        raise KeyError("Couldn't find a MEV value column.")
-
-    value_full = pick_value_col(df_full)
-    value_avg = pick_value_col(df_avg)
+    value_full = pick_value_col(df_full, timepoint)
+    value_avg = pick_value_col(df_avg, timepoint)
 
     # Create lookup from avg file
     avg_lookup = df_avg[["Mev", value_avg]].copy().rename(columns={value_avg: "_avg_value"})
@@ -718,9 +720,6 @@ def load_and_prepare_scores(qual_factor_input_dir, project_dir, risk_file_dir, m
         .str.replace(" ", "_")
         .str.replace(".", "", regex=False)
     )
-
-    # Keep only these columns
-    final_cols = ["scorecard_seq_id", "q_join", "r_join", "ordinal_response", "threshold"]
 
     risk_mi["main_profile_leid"] = risk_mi["main_profile_leid"].astype(str)
     out["main_profile_leid"] = out["main_profile_leid"].astype(str)
@@ -1140,7 +1139,6 @@ def compute_qual_cg(stressed_df, misc_input_dir, static_input_dir, pd_data, outp
     score_mapping = score_mapping[
         ["non_fin_ques_no", "non_fin_res_id", "non_fin_res_score"]
     ]
-    # score_mapping["non_fin_ques_no"] = score_mapping["non_fin_ques_no"].astype(str)
 
     final = final.merge(
         score_mapping,
@@ -1334,11 +1332,6 @@ def compute_standalone_and_overrides(qual_cg_df, misc_input_dir, static_input_di
     # merge
     out = qual.merge(oft, on="scorecard_seq_id", how="left")
 
-    # fill blanks in stressed_offtkr_cg with combin_cg
-
-    # out['stress_cg'] = out['stress_cg'].replace(0, pd.NA)
-    # out['unstress_cg'] = out['unstress_cg'].replace(0, pd.NA)
-
     # fill blanks with s_rating
     out["stressed_offtkr_cg"] = out["stress_cg"].fillna(out["combined_crg"])
     out["unstressed_offtkr_crg"] = out["unstress_cg"].fillna(out["combined_crg"])
@@ -1380,8 +1373,6 @@ def compute_standalone_and_overrides(qual_cg_df, misc_input_dir, static_input_di
     )
 
     # --- Step 2: Model PD ---
-    # df['unstressed_model_pd'] = 0.5 * df['oftkr_unstrs_pd'] + 0.5 * df['unstressed_qual_pd']
-    # df['model_pd'] = 0.5 * df['oftkr_strs_pd'] + 0.5 * df['qual_pd']
     df["unstressed_model_pd"] = (
         0.5 * df["offtkr_unstress_final_pd"] + 0.5 * df["unstressed_qual_pd"]
     )
@@ -1417,8 +1408,6 @@ def compute_standalone_and_overrides(qual_cg_df, misc_input_dir, static_input_di
     # Convert downgrade column to numeric in case it's stored as string
     aws["downgraded_by"] = pd.to_numeric(aws["downgraded_by"], errors="coerce")
 
-    # Group by scorecard_seq_id and sum downgrades
-    # total_downgrades_by_scorecard = aws.groupby("scorecard_seq_id")["downgraded_by"].sum().reset_index()
     total_downgrades_by_scorecard = (
         aws.groupby("scorecard_seq_id")["downgraded_by"].max().reset_index()
     )
@@ -1450,11 +1439,6 @@ def compute_standalone_and_overrides(qual_cg_df, misc_input_dir, static_input_di
     aws_cg_data = df_merged
     ps = pd.read_csv(misc_input_dir / "ps.csv", encoding="utf-8")
     sc_sub_category = pd.read_csv(new_input_dir / "sc_sub_category.csv", encoding="utf-8")
-    sovereign_ceiling_cor = pd.read_csv(
-        new_input_dir / "sovereign_ceiling_cor.csv", encoding="utf-8"
-    )
-    lcy_fcy = pd.read_csv(new_input_dir / "lcy_fcy.csv", encoding="utf-8")
-    cntry_rating = pd.read_csv(new_input_dir / "cntry_rating.csv", encoding="utf-8")
     ps_data = ps[
         [
             "scorecard_seq_id",
@@ -1551,11 +1535,7 @@ def compute_standalone_and_overrides(qual_cg_df, misc_input_dir, static_input_di
     # child sov bau & stress cg (from merge_ps country)
     merge_ps_aws["child_sov_stress_cg"] = merge_ps_aws["ctry_of_risk"].map(sov_map)
 
-    # ===== ensure no string issues =====
-    merge_ps_aws["parent_sov_stress_cg"] = merge_ps_aws["parent_sov_stress_cg"]
-    merge_ps_aws["child_sov_stress_cg"] = merge_ps_aws["child_sov_stress_cg"]
-
-    # # ===== FILL PARENT SOV STRESS =====
+    # ===== FILL PARENT SOV STRESS =====
     parent_fill_mask = (
         merge_ps_aws["sc_parent_crg"].notna() & merge_ps_aws["parent_sov_stress_cg"].isna()
     )
@@ -1687,8 +1667,6 @@ def compute_standalone_and_overrides(qual_cg_df, misc_input_dir, static_input_di
         mask_sov, "child_sov_stress_num"
     ]
 
-    # merge_ps_aws['child_sov_stress_num'] = merge_ps_aws['child_sov_stress_num'].fillna(merge_ps_aws['sov_ceiling_num'])
-
     # ===== numeric convert =====
     cols = [
         "after_parent_stress_cg_num",
@@ -1794,8 +1772,6 @@ def compute_standalone_and_overrides(qual_cg_df, misc_input_dir, static_input_di
     final_crg_post_overrides["Impact_Indicator_post_overrides"] = impact_indicator(
         final_crg_post_overrides["Difference in Notches_post_overrides"]
     )
-    # final_crg_post_overrides["Impact_Indicator_post_overrides"]=np.where(final_crg_post_overrides["Difference in Notches_post_overrides"]>0,"Downgrade",
-    # np.where(final_crg_post_overrides["Difference in Notches"]<0,"Upgrade","Flat"))
     final_crg_post_overrides["Category_post_overrides"] = categorise_notch_diff(
         final_crg_post_overrides["Difference in Notches_post_overrides"]
     )
