@@ -1,441 +1,603 @@
 """
-Random Forest Model Interpretation
-====================================
+Random Forest Regressor — Interpretation & Visualisation
+=========================================================
 Covers:
-  1. MDI (Gini) Feature Importance
+  0. Data & Model (RandomForestRegressor, California Housing)
+  1. MDI Feature Importance (Mean Decrease in Impurity)
   2. Permutation Importance (MDA)
-  3. Out-of-Bag (OOB) Error
+  3. OOB R² Curve vs. number of trees
   4. Partial Dependence Plots (PDP) + ICE
-  5. SHAP Values (TreeSHAP)
-  6. Proximity Matrix
+  5. SHAP Values (TreeSHAP) — fixed for regressor
+  6. Tree Split Visualisation (single tree + decision path)
+  7. Proximity Matrix + MDS Projection
 
 References:
   - Breiman (2001). Random Forests. Machine Learning, 45, 5-32.
+    https://doi.org/10.1023/A:1010933404324
   - Strobl et al. (2007). Bias in RF variable importance. BMC Bioinformatics.
-  - Lundberg & Lee (2017). SHAP. NeurIPS.
-  - Friedman (2001). Greedy function approximation. Annals of Statistics.
+    https://doi.org/10.1186/1471-2105-8-25
+  - Lundberg & Lee (2017). SHAP. NeurIPS. https://arxiv.org/abs/1705.07874
+  - Lundberg et al. (2020). TreeSHAP. Nature Machine Intelligence.
+    https://doi.org/10.1038/s42256-019-0138-9
+  - Friedman (2001). PDP. Annals of Statistics.
+    https://doi.org/10.1214/aos/1013203451
 
-Install dependencies:
+Install:
   pip install scikit-learn shap matplotlib seaborn numpy pandas
 """
 
+import warnings
 import numpy as np
 import pandas as pd
 import matplotlib.pyplot as plt
-import matplotlib.gridspec as gridspec
-import seaborn as sns
-import warnings
-
-from sklearn.datasets import load_breast_cancer
-from sklearn.ensemble import RandomForestClassifier
-from sklearn.inspection import permutation_importance, PartialDependenceDisplay
-from sklearn.model_selection import train_test_split
-from sklearn.preprocessing import StandardScaler
-
 import shap
+
+from sklearn.datasets import fetch_california_housing
+from sklearn.ensemble import RandomForestRegressor
+from sklearn.inspection import permutation_importance, PartialDependenceDisplay
+from sklearn.manifold import MDS
+from sklearn.model_selection import train_test_split
+from sklearn.tree import plot_tree
 
 warnings.filterwarnings("ignore")
 
-# ── Plotting style ────────────────────────────────────────────────────────────
+# ── Global style ──────────────────────────────────────────────────────────────
+DARK_BG  = "#0d0f18"
+PANEL_BG = "#161925"
+BORDER   = "#2e3248"
+FG       = "#dde1f0"
+MUTED    = "#8890aa"
+
+PURPLE   = "#7c6aff"
+TEAL     = "#00d4aa"
+CORAL    = "#ff6b6b"
+GOLD     = "#ffd166"
+
 plt.rcParams.update({
-    "figure.facecolor": "#0f1117",
-    "axes.facecolor":   "#1a1d27",
-    "axes.edgecolor":   "#3a3d4d",
-    "axes.labelcolor":  "#e0e0e0",
-    "xtick.color":      "#a0a0b0",
-    "ytick.color":      "#a0a0b0",
-    "text.color":       "#e0e0e0",
-    "grid.color":       "#2a2d3d",
+    "figure.facecolor": DARK_BG,
+    "axes.facecolor":   PANEL_BG,
+    "axes.edgecolor":   BORDER,
+    "axes.labelcolor":  FG,
+    "axes.titlecolor":  FG,
+    "xtick.color":      MUTED,
+    "ytick.color":      MUTED,
+    "text.color":       FG,
+    "grid.color":       BORDER,
     "grid.linestyle":   "--",
     "grid.alpha":       0.5,
     "font.family":      "monospace",
+    "legend.facecolor": PANEL_BG,
+    "legend.edgecolor": BORDER,
 })
-
-ACCENT   = "#7c6aff"   # purple
-ACCENT2  = "#00d4aa"   # teal
-ACCENT3  = "#ff6b6b"   # coral
-PALETTE  = [ACCENT, ACCENT2, ACCENT3, "#ffd166", "#06aed5"]
 
 
 # ═══════════════════════════════════════════════════════════════════════════════
-# 0. DATA & MODEL
+# 0.  DATA & MODEL
 # ═══════════════════════════════════════════════════════════════════════════════
 
 def load_data_and_train():
-    """Load Breast Cancer dataset and train a Random Forest."""
-    data   = load_breast_cancer()
-    X      = pd.DataFrame(data.data, columns=data.feature_names)
-    y      = data.target                              # 0 = malignant, 1 = benign
-    labels = data.target_names
+    """
+    California Housing dataset (Pace & Barry 1997).
+    Target: median house value (in $100 000s) for California census blocks.
+    8 numeric features, 20 640 samples.
+    """
+    data = fetch_california_housing()
+    X    = pd.DataFrame(data.data, columns=data.feature_names)
+    y    = data.target
 
     X_train, X_test, y_train, y_test = train_test_split(
-        X, y, test_size=0.2, random_state=42, stratify=y
+        X, y, test_size=0.2, random_state=42
     )
 
-    rf = RandomForestClassifier(
-        n_estimators=200,
-        max_depth=None,
-        min_samples_leaf=1,
-        oob_score=True,        # enables OOB error estimate
-        n_jobs=-1,
-        random_state=42,
+    rf = RandomForestRegressor(
+        n_estimators    = 200,
+        max_depth       = None,
+        min_samples_leaf= 2,
+        oob_score       = True,   # free R² on OOB samples
+        n_jobs          = -1,
+        random_state    = 42,
     )
     rf.fit(X_train, y_train)
 
-    print(f"Test Accuracy : {rf.score(X_test, y_test):.4f}")
-    print(f"OOB Accuracy  : {rf.oob_score_:.4f}")
-    print(f"OOB Error     : {1 - rf.oob_score_:.4f}\n")
+    print(f"  Test R²  : {rf.score(X_test, y_test):.4f}")
+    print(f"  OOB  R²  : {rf.oob_score_:.4f}\n")
 
-    return rf, X_train, X_test, y_train, y_test, X, y, labels, data.feature_names
+    return rf, X_train, X_test, y_train, y_test, X, y, data.feature_names
 
 
 # ═══════════════════════════════════════════════════════════════════════════════
-# 1. MDI — Mean Decrease in Impurity
+# 1.  MDI — Mean Decrease in Impurity
 # ═══════════════════════════════════════════════════════════════════════════════
 
 def plot_mdi_importance(rf, feature_names, top_n=15):
     """
-    Mean Decrease in Impurity (Gini importance).
-    Computed internally by sklearn during training.
+    MDI (variance-reduction importance) — Breiman (2001):
 
-    Formula (per Breiman 2001):
-        MDI(Xj) = (1/T) * Σ_t Σ_{v ∈ V_t(Xj)} p(v) * Δi(v)
-    where p(v) = n_v / n and Δi(v) is the impurity decrease at node v.
+        MDI(Xj) = (1/T) Σ_t  Σ_{v ∈ V_t(Xj)}  p(v) · Δi(v)
 
-    ⚠ Known to favour high-cardinality features (Strobl et al., 2007).
+    For regression trees: impurity = MSE, so Δi(v) = MSE_parent − MSE_children.
+
+    ⚠ Biased toward high-cardinality features (Strobl et al. 2007).
     """
-    importances = pd.Series(rf.feature_importances_, index=feature_names)
-    importances = importances.nlargest(top_n).sort_values()
+    imp = pd.Series(rf.feature_importances_, index=feature_names)
+    imp = imp.nlargest(top_n).sort_values()
 
-    fig, ax = plt.subplots(figsize=(9, 6))
-    colors = plt.cm.plasma(np.linspace(0.3, 0.9, top_n))
-    bars = ax.barh(importances.index, importances.values, color=colors, height=0.7)
+    fig, ax = plt.subplots(figsize=(9, 5))
+    colors  = plt.cm.plasma(np.linspace(0.25, 0.92, len(imp)))
+    bars    = ax.barh(imp.index, imp.values, color=colors, height=0.65)
 
-    # value labels
-    for bar, val in zip(bars, importances.values):
-        ax.text(val + 0.001, bar.get_y() + bar.get_height() / 2,
-                f"{val:.4f}", va="center", fontsize=8, color="#cccccc")
+    for bar, val in zip(bars, imp.values):
+        ax.text(val + imp.max() * 0.01, bar.get_y() + bar.get_height() / 2,
+                f"{val:.4f}", va="center", fontsize=8, color=MUTED)
 
     ax.set_xlabel("Mean Decrease in Impurity (MDI)")
-    ax.set_title("Feature Importance — MDI (Gini)", fontsize=13, fontweight="bold",
-                 color=ACCENT, pad=12)
-    ax.set_xlim(0, importances.max() * 1.15)
+    ax.set_title("Feature Importance — MDI", fontsize=13, color=PURPLE, pad=10)
+    ax.set_xlim(0, imp.max() * 1.18)
     ax.grid(axis="x")
     fig.tight_layout()
     fig.savefig("plot_1_mdi_importance.png", dpi=150, bbox_inches="tight",
-                facecolor=fig.get_facecolor())
+                facecolor=DARK_BG)
     plt.show()
-    print("✔  Saved: plot_1_mdi_importance.png\n")
+    print("✔  plot_1_mdi_importance.png\n")
 
 
 # ═══════════════════════════════════════════════════════════════════════════════
-# 2. MDA — Mean Decrease in Accuracy (Permutation Importance)
+# 2.  MDA — Permutation Importance
 # ═══════════════════════════════════════════════════════════════════════════════
 
-def plot_permutation_importance(rf, X_test, y_test, feature_names, top_n=15, n_repeats=30):
+def plot_permutation_importance(rf, X_test, y_test, feature_names,
+                                top_n=15, n_repeats=30):
     """
-    Permutation importance (Breiman 2001).
-    Shuffles each feature on OOB / held-out data and measures accuracy drop.
+    Permutation importance for regressors (Breiman 2001):
 
-    MDA(Xj) = (1/T) * Σ_t [ Acc_t^OOB − Acc_t^OOB(π_j) ]
+        MDA(Xj) = (1/T) Σ_t [ R²_t^OOB  −  R²_t^OOB(π_j) ]
 
-    Unbiased w.r.t. feature cardinality unlike MDI.
-    Uses n_repeats=30 for stable estimates (see sklearn docs).
+    Shuffles feature Xj on held-out data; measures R² drop.
+    n_repeats=30 provides stable estimates of mean ± SD.
     """
-    result = permutation_importance(
+    res = permutation_importance(
         rf, X_test, y_test,
-        n_repeats=n_repeats,
-        random_state=42,
-        n_jobs=-1,
-        scoring="accuracy",
+        n_repeats   = n_repeats,
+        scoring     = "r2",
+        n_jobs      = -1,
+        random_state= 42,
     )
-
-    perm_df = pd.DataFrame({
-        "feature":   feature_names,
-        "mean":      result.importances_mean,
-        "std":       result.importances_std,
+    df = pd.DataFrame({
+        "feature": feature_names,
+        "mean":    res.importances_mean,
+        "std":     res.importances_std,
     }).nlargest(top_n, "mean").sort_values("mean")
 
-    fig, ax = plt.subplots(figsize=(9, 6))
-    y_pos = np.arange(len(perm_df))
-    ax.barh(y_pos, perm_df["mean"], xerr=perm_df["std"],
-            color=ACCENT2, alpha=0.85, height=0.65,
-            error_kw=dict(ecolor="#ffffff55", capsize=3))
-    ax.set_yticks(y_pos)
-    ax.set_yticklabels(perm_df["feature"], fontsize=8)
-    ax.set_xlabel(f"Mean Accuracy Decrease ± SD  (n_repeats={n_repeats})")
-    ax.set_title("Permutation Importance (MDA)", fontsize=13, fontweight="bold",
-                 color=ACCENT2, pad=12)
+    fig, ax = plt.subplots(figsize=(9, 5))
+    ypos = np.arange(len(df))
+    ax.barh(ypos, df["mean"], xerr=df["std"], color=TEAL, alpha=0.85, height=0.6,
+            error_kw=dict(ecolor="#ffffff44", capsize=3))
+    ax.set_yticks(ypos)
+    ax.set_yticklabels(df["feature"], fontsize=8)
+    ax.set_xlabel(f"Mean R² Decrease ± SD  (n_repeats={n_repeats})")
+    ax.set_title("Permutation Importance (MDA)", fontsize=13, color=TEAL, pad=10)
     ax.grid(axis="x")
     fig.tight_layout()
     fig.savefig("plot_2_permutation_importance.png", dpi=150, bbox_inches="tight",
-                facecolor=fig.get_facecolor())
+                facecolor=DARK_BG)
     plt.show()
-    print("✔  Saved: plot_2_permutation_importance.png\n")
+    print("✔  plot_2_permutation_importance.png\n")
 
 
 # ═══════════════════════════════════════════════════════════════════════════════
-# 3. OOB Error Curve
+# 3.  OOB R² Curve
 # ═══════════════════════════════════════════════════════════════════════════════
 
-def plot_oob_error_curve(X_train, y_train, max_trees=300, step=10):
+def plot_oob_curve(X_train, y_train, max_trees=300, step=10):
     """
-    OOB Error vs. number of trees.
+    OOB R² vs. number of trees for RandomForestRegressor.
 
-    OOB Error = (1/n) * Σ_i 1[ŷ_i^OOB ≠ y_i]
-
-    Each bootstrap sample uses ~63.2% of training data; remaining
-    ~36.8% are OOB samples — a free internal validation set (Breiman 1996).
-    Uses warm_start=True for incremental fitting efficiency.
+    Each bootstrap sample covers ~63.2% of training data; the remaining
+    ~36.8% are OOB and serve as a free validation set (Breiman 1996).
+    warm_start=True avoids re-fitting previously trained trees.
     """
-    n_trees_range = range(step, max_trees + 1, step)
-    oob_errors    = []
+    n_range = range(step, max_trees + 1, step)
+    oob_r2s = []
 
-    rf_oob = RandomForestClassifier(
-        warm_start=True, oob_score=True, n_jobs=-1, random_state=42
+    rf_oob = RandomForestRegressor(
+        warm_start=True, oob_score=True, n_jobs=-1,
+        min_samples_leaf=2, random_state=42
     )
-
-    for n in n_trees_range:
+    for n in n_range:
         rf_oob.set_params(n_estimators=n)
         rf_oob.fit(X_train, y_train)
-        oob_errors.append(1 - rf_oob.oob_score_)
+        oob_r2s.append(rf_oob.oob_score_)
+
+    best_n  = list(n_range)[np.argmax(oob_r2s)]
+    best_r2 = max(oob_r2s)
 
     fig, ax = plt.subplots(figsize=(9, 4))
-    ax.plot(list(n_trees_range), oob_errors, color=ACCENT3, lw=2.5)
-    ax.fill_between(list(n_trees_range), oob_errors, alpha=0.15, color=ACCENT3)
-    best_n   = list(n_trees_range)[np.argmin(oob_errors)]
-    best_err = min(oob_errors)
-    ax.axvline(best_n, color="#ffffff55", linestyle="--", lw=1.2)
-    ax.annotate(f"min OOB = {best_err:.4f}\n@ {best_n} trees",
-                xy=(best_n, best_err),
-                xytext=(best_n + 15, best_err + 0.005),
-                color="#ffffff", fontsize=9,
-                arrowprops=dict(arrowstyle="->", color="#ffffff88"))
+    ax.plot(list(n_range), oob_r2s, color=CORAL, lw=2.5)
+    ax.fill_between(list(n_range), oob_r2s, alpha=0.12, color=CORAL)
+    ax.axvline(best_n, color="#ffffff44", linestyle="--", lw=1.2)
+    ax.annotate(f"max OOB R² = {best_r2:.4f}\n@ {best_n} trees",
+                xy=(best_n, best_r2),
+                xytext=(best_n + 20, best_r2 - 0.012),
+                color=FG, fontsize=9,
+                arrowprops=dict(arrowstyle="->", color="#ffffff66"))
     ax.set_xlabel("Number of Trees")
-    ax.set_ylabel("OOB Error")
-    ax.set_title("OOB Error vs. Number of Trees", fontsize=13, fontweight="bold",
-                 color=ACCENT3, pad=12)
+    ax.set_ylabel("OOB R²")
+    ax.set_title("OOB R² vs. Number of Trees", fontsize=13, color=CORAL, pad=10)
     ax.grid()
     fig.tight_layout()
-    fig.savefig("plot_3_oob_error_curve.png", dpi=150, bbox_inches="tight",
-                facecolor=fig.get_facecolor())
+    fig.savefig("plot_3_oob_curve.png", dpi=150, bbox_inches="tight",
+                facecolor=DARK_BG)
     plt.show()
-    print(f"✔  Saved: plot_3_oob_error_curve.png  (best={best_n} trees, OOB={best_err:.4f})\n")
+    print(f"✔  plot_3_oob_curve.png  (best={best_n} trees, OOB R²={best_r2:.4f})\n")
 
 
 # ═══════════════════════════════════════════════════════════════════════════════
-# 4. Partial Dependence Plots (PDP) + Individual Conditional Expectation (ICE)
+# 4.  PDP + ICE
 # ═══════════════════════════════════════════════════════════════════════════════
 
-def plot_pdp_ice(rf, X_train, feature_names, top_features=None):
+def plot_pdp_ice(rf, X_train, feature_names):
     """
-    PDP (Friedman 2001):
-        f̂_S(x_S) = E_{X_C}[f̂(x_S, X_C)] ≈ (1/n) Σ_i f̂(x_S, x_C^(i))
+    PDP (Friedman 2001) — marginal expected prediction:
 
-    ICE plots (Goldstein et al. 2015) show per-instance curves, revealing
-    heterogeneous effects hidden by PDP averaging.
+        f_S(x_S) = E_{X_C}[f(x_S, X_C)]  ≈  (1/n) Σ_i f(x_S, x_C^(i))
 
-    ⚠ PDPs assume feature independence. ICE plots are more robust for
-    detecting interaction effects.
+    ICE plots (Goldstein et al. 2015) show individual curves, exposing
+    heterogeneous effects that PDP averaging can mask.
+
+    ⚠ Both assume feature independence. With correlated features consider
+      ALE plots (Apley & Zhu 2020) as a more robust alternative.
     """
-    if top_features is None:
-        importances  = pd.Series(rf.feature_importances_, index=feature_names)
-        top_features = importances.nlargest(4).index.tolist()
+    imp  = pd.Series(rf.feature_importances_, index=feature_names)
+    top4 = imp.nlargest(4).index.tolist()
 
     fig, axes = plt.subplots(2, 2, figsize=(12, 8))
-    axes = axes.flatten()
-
-    for ax, feat in zip(axes, top_features):
-        feat_idx = list(feature_names).index(feat)
-        display  = PartialDependenceDisplay.from_estimator(
-            rf, X_train,
-            features=[feat_idx],
-            kind="both",         # PDP + ICE
-            subsample=150,
-            n_jobs=-1,
-            random_state=42,
-            ax=ax,
-            ice_lines_kw={"color": ACCENT, "alpha": 0.07, "lw": 0.8},
-            pd_line_kw={"color": ACCENT2, "lw": 2.5, "label": "PDP"},
+    for ax, feat in zip(axes.flatten(), top4):
+        idx = list(feature_names).index(feat)
+        PartialDependenceDisplay.from_estimator(
+            rf, X_train, features=[idx],
+            kind        = "both",
+            subsample   = 200,
+            n_jobs      = -1,
+            random_state= 42,
+            ax          = ax,
+            ice_lines_kw= {"color": PURPLE, "alpha": 0.06, "lw": 0.7},
+            pd_line_kw  = {"color": TEAL,   "lw": 2.5},
         )
-        ax.set_title(feat, fontsize=9, color="#e0e0e0")
-        ax.set_facecolor("#1a1d27")
-        ax.tick_params(colors="#a0a0b0", labelsize=7)
-        ax.set_xlabel(feat, fontsize=8)
-        ax.set_ylabel("Partial Dependence", fontsize=8)
-        ax.grid(True, alpha=0.3)
+        ax.set_title(feat, fontsize=9, color=FG)
+        ax.set_facecolor(PANEL_BG)
+        ax.tick_params(colors=MUTED, labelsize=7)
+        ax.set_ylabel("Predicted value", fontsize=7)
+        ax.grid(alpha=0.3)
 
-    fig.suptitle("Partial Dependence (PDP) + ICE Plots\n"
-                 "Purple lines = individual instances  |  Teal line = average (PDP)",
-                 fontsize=11, fontweight="bold", color=ACCENT2, y=1.01)
+    fig.suptitle(
+        "Partial Dependence (teal) + ICE (purple) — Top 4 Features",
+        fontsize=11, color=TEAL, y=1.01
+    )
     fig.tight_layout()
     fig.savefig("plot_4_pdp_ice.png", dpi=150, bbox_inches="tight",
-                facecolor=fig.get_facecolor())
+                facecolor=DARK_BG)
     plt.show()
-    print("✔  Saved: plot_4_pdp_ice.png\n")
+    print("✔  plot_4_pdp_ice.png\n")
 
 
 # ═══════════════════════════════════════════════════════════════════════════════
-# 5. SHAP — SHapley Additive exPlanations (TreeSHAP)
+# 5.  SHAP — TreeSHAP (Regressor)
 # ═══════════════════════════════════════════════════════════════════════════════
 
 def plot_shap(rf, X_train, X_test, feature_names):
     """
-    TreeSHAP (Lundberg et al. 2020) — exact Shapley values for tree ensembles.
+    TreeSHAP for RandomForestRegressor (Lundberg et al. 2020).
 
     Prediction decomposition:
-        f̂(x) = φ_0 + Σ_{j=1}^{p} φ_j
+        f(x) = phi_0 + Σ_{j=1}^{p} phi_j
 
-    Shapley value formula:
-        φ_j = Σ_{S ⊆ F\\{j}} [ |S|!(|F|-|S|-1)! / |F|! ] * [f̂(S∪{j}) - f̂(S)]
+    Shapley value:
+        phi_j = Σ_{S ⊆ F\\{j}}  |S|!(|F|-|S|-1)!/|F|!  · [f(S∪{j}) − f(S)]
 
-    TreeSHAP complexity: O(T * L * D²) — tractable for large forests.
-    Satisfies: Efficiency, Symmetry, Dummy, Additivity axioms.
+    ── ROOT CAUSE OF THE ORIGINAL ERROR ───────────────────────────────────────
+    "only integer scalar arrays can be converted to a scalar index"
+
+    This error appears when code does `shap_values[1]` treating the output as
+    a list (classifier pattern). For a RandomForestRegressor, shap_values is a
+    plain 2-D ndarray of shape (n_samples, n_features) — indexing it with [1]
+    selects the second ROW, returning a 1-D array. Downstream code then tries
+    to use that 1-D array where a 2-D array is expected, causing the error.
+
+    Fix: never index shap_values for a regressor. Use it directly.
+    Similarly, expected_value is a plain scalar float, not a list — no [1].
+    ───────────────────────────────────────────────────────────────────────────
     """
-    explainer   = shap.TreeExplainer(rf)
-    shap_values = explainer.shap_values(X_test)
+    # Use a background sample for speed (100 rows is sufficient for TreeSHAP)
+    background   = shap.sample(X_train, 100, random_state=42)
+    explainer    = shap.TreeExplainer(rf, data=background)
 
-    # For binary classification sklearn returns list [class0, class1]
-    if isinstance(shap_values, list):
-        sv = shap_values[1]   # class=1 (benign)
-    else:
-        sv = shap_values
+    # For RFRegressor: always a 2-D ndarray (n_samples, n_features)
+    sv           = explainer.shap_values(X_test)          # shape: (n, p)
+    base_val     = float(explainer.expected_value)         # scalar float
 
-    # ── 5a. Summary (beeswarm) plot ───────────────────────────────────────────
-    fig1, ax1 = plt.subplots(figsize=(10, 7))
-    shap.summary_plot(
-        sv, X_test,
-        feature_names=list(feature_names),
-        show=False,
-        plot_size=None,
-        color_bar=True,
-    )
-    ax1 = plt.gca()
-    ax1.set_title("SHAP Summary Plot (Beeswarm) — Class: Benign",
-                  fontsize=12, fontweight="bold", color=ACCENT, pad=10)
-    fig1.tight_layout()
-    fig1.savefig("plot_5a_shap_summary.png", dpi=150, bbox_inches="tight")
+    assert sv.ndim == 2, f"Expected 2-D shap_values, got shape {sv.shape}"
+    print(f"  shap_values shape : {sv.shape}")
+    print(f"  expected_value    : {base_val:.4f}")
+
+    feature_list = list(feature_names)
+
+    # ── 5a. Beeswarm summary ─────────────────────────────────────────────────
+    shap.summary_plot(sv, X_test, feature_names=feature_list,
+                      show=False, plot_size=(10, 6))
+    plt.gca().set_title("SHAP Summary — Beeswarm",
+                         fontsize=12, color=PURPLE, pad=10)
+    plt.tight_layout()
+    plt.savefig("plot_5a_shap_beeswarm.png", dpi=150, bbox_inches="tight")
     plt.show()
-    print("✔  Saved: plot_5a_shap_summary.png")
+    print("✔  plot_5a_shap_beeswarm.png")
 
-    # ── 5b. Bar plot (mean |SHAP|) ────────────────────────────────────────────
-    fig2, ax2 = plt.subplots(figsize=(9, 6))
-    shap.summary_plot(
-        sv, X_test,
-        feature_names=list(feature_names),
-        plot_type="bar",
-        show=False,
-        plot_size=None,
-        color=ACCENT2,
-    )
-    ax2 = plt.gca()
-    ax2.set_title("SHAP Global Importance — Mean |φ_j|",
-                  fontsize=12, fontweight="bold", color=ACCENT2, pad=10)
-    fig2.tight_layout()
-    fig2.savefig("plot_5b_shap_bar.png", dpi=150, bbox_inches="tight")
+    # ── 5b. Bar plot (mean |phi_j|) ──────────────────────────────────────────
+    shap.summary_plot(sv, X_test, feature_names=feature_list,
+                      plot_type="bar", show=False, plot_size=(9, 5), color=TEAL)
+    plt.gca().set_title("SHAP Global Importance — Mean |phi_j|",
+                         fontsize=12, color=TEAL, pad=10)
+    plt.tight_layout()
+    plt.savefig("plot_5b_shap_bar.png", dpi=150, bbox_inches="tight")
     plt.show()
-    print("✔  Saved: plot_5b_shap_bar.png")
+    print("✔  plot_5b_shap_bar.png")
 
-    # ── 5c. Waterfall plot for a single prediction ────────────────────────────
+    # ── 5c. Waterfall (single sample) ────────────────────────────────────────
     sample_idx = 0
     exp = shap.Explanation(
-        values          = sv[sample_idx],
-        base_values     = explainer.expected_value[1] if isinstance(
-                            explainer.expected_value, (list, np.ndarray))
-                          else explainer.expected_value,
-        data            = X_test.iloc[sample_idx].values,
-        feature_names   = list(feature_names),
+        values        = sv[sample_idx],          # 1-D array shape (p,)
+        base_values   = base_val,                # scalar — NOT base_val[1]
+        data          = X_test.iloc[sample_idx].values,
+        feature_names = feature_list,
     )
-    fig3, ax3 = plt.subplots(figsize=(9, 6))
-    shap.waterfall_plot(exp, show=False, max_display=15)
-    ax3 = plt.gca()
-    ax3.set_title(f"SHAP Waterfall — Sample #{sample_idx}",
-                  fontsize=12, fontweight="bold", color=ACCENT3, pad=10)
-    fig3.tight_layout()
-    fig3.savefig("plot_5c_shap_waterfall.png", dpi=150, bbox_inches="tight")
+    shap.waterfall_plot(exp, max_display=15, show=False)
+    plt.gca().set_title(f"SHAP Waterfall — Sample #{sample_idx}",
+                         fontsize=12, color=CORAL, pad=10)
+    plt.tight_layout()
+    plt.savefig("plot_5c_shap_waterfall.png", dpi=150, bbox_inches="tight")
     plt.show()
-    print("✔  Saved: plot_5c_shap_waterfall.png\n")
+    print("✔  plot_5c_shap_waterfall.png")
+
+    # ── 5d. Dependence plot (most important feature) ──────────────────────────
+    top_feat = feature_list[int(np.argmax(np.abs(sv).mean(axis=0)))]
+    shap.dependence_plot(top_feat, sv, X_test, feature_names=feature_list,
+                         show=False, dot_size=20, alpha=0.5)
+    plt.gca().set_title(f"SHAP Dependence — {top_feat}",
+                         fontsize=12, color=GOLD, pad=10)
+    plt.tight_layout()
+    plt.savefig("plot_5d_shap_dependence.png", dpi=150, bbox_inches="tight")
+    plt.show()
+    print("✔  plot_5d_shap_dependence.png\n")
 
     return sv
 
 
 # ═══════════════════════════════════════════════════════════════════════════════
-# 6. Proximity Matrix
+# 6.  TREE SPLIT VISUALISATION
 # ═══════════════════════════════════════════════════════════════════════════════
 
-def compute_proximity_matrix(rf, X, n_samples=100):
+def plot_single_tree(rf, feature_names, tree_index=0, max_depth=3):
+    """
+    Render one estimator from the forest with sklearn.tree.plot_tree.
+
+    Capped at max_depth=3 for readability. Each node shows:
+      • Split condition  (feature <= threshold)
+      • MSE             (node impurity for regression)
+      • samples         (number of training samples at node)
+      • value           (mean target in node = local prediction)
+
+    Colour intensity maps to predicted value (lighter = lower, darker = higher).
+    """
+    tree = rf.estimators_[tree_index]
+    fig, ax = plt.subplots(figsize=(22, 8), facecolor=DARK_BG)
+    ax.set_facecolor(DARK_BG)
+
+    plot_tree(
+        tree,
+        max_depth    = max_depth,
+        feature_names= list(feature_names),
+        filled       = True,
+        impurity     = True,
+        rounded      = True,
+        fontsize     = 8,
+        ax           = ax,
+        precision    = 3,
+    )
+    ax.set_title(
+        f"Tree #{tree_index} from forest  (showing max_depth={max_depth})\n"
+        f"Full tree depth = {tree.get_depth()}  |  Leaves = {tree.get_n_leaves()}",
+        fontsize=12, color=PURPLE, pad=12
+    )
+    fig.tight_layout()
+    fig.savefig("plot_6a_single_tree.png", dpi=150, bbox_inches="tight",
+                facecolor=DARK_BG)
+    plt.show()
+    print("✔  plot_6a_single_tree.png")
+
+
+def plot_decision_path(rf, X_test, feature_names, tree_index=0, sample_idx=0):
+    """
+    Trace the exact path a single sample takes through one tree.
+
+    sklearn's decision_path() returns a sparse boolean matrix of shape
+    (n_samples, n_nodes). The non-zero column indices for a given row
+    are the node IDs visited during inference.
+
+    At each internal node we record:
+      • which feature was tested
+      • the threshold value
+      • the sample's actual feature value
+      • which branch was taken (left = True if value <= threshold)
+    At the leaf we record the final prediction (mean target value).
+    """
+    tree     = rf.estimators_[tree_index]
+    t        = tree.tree_
+    sample   = X_test.iloc[[sample_idx]]
+    path_mat = tree.decision_path(sample)
+    node_ids = path_mat.indices                    # nodes visited
+
+    records = []
+    for node_id in node_ids:
+        if t.children_left[node_id] == -1:         # leaf node
+            records.append({
+                "type":  "LEAF",
+                "label": f"LEAF  →  Predict: {t.value[node_id][0][0]:.4f}",
+            })
+        else:
+            feat_idx = t.feature[node_id]
+            feat     = feature_names[feat_idx]
+            thresh   = t.threshold[node_id]
+            val      = float(sample.iloc[0, feat_idx])
+            branch   = "≤  LEFT ↙" if val <= thresh else ">  RIGHT ↘"
+            records.append({
+                "type":  "SPLIT",
+                "label": (f"Node {node_id}: {feat} ≤ {thresh:.3f}\n"
+                          f"  sample = {val:.3f}   →  {branch}"),
+                "left":  val <= thresh,
+            })
+
+    n = len(records)
+    fig, ax = plt.subplots(figsize=(10, max(6, n * 1.35)))
+    ax.set_xlim(0, 10)
+    ax.set_ylim(0, n + 1)
+    ax.axis("off")
+
+    for i, rec in enumerate(records):
+        y       = n - i
+        is_leaf = rec["type"] == "LEAF"
+        border  = TEAL if is_leaf else PURPLE
+        ax.text(5, y, rec["label"],
+                ha="center", va="center", fontsize=9, color=FG,
+                fontfamily="monospace",
+                bbox=dict(boxstyle="round,pad=0.5",
+                          facecolor=PANEL_BG, edgecolor=border, lw=1.8))
+        if i < n - 1:
+            went_left  = records[i].get("left", True)
+            arr_color  = TEAL if went_left else CORAL
+            ax.annotate("", xy=(5, y - 0.55), xytext=(5, y - 0.12),
+                        arrowprops=dict(arrowstyle="-|>", color=arr_color, lw=1.5))
+
+    ax.set_title(
+        f"Decision Path — Sample #{sample_idx}  |  Tree #{tree_index}\n"
+        f"Path length: {n} nodes  (depth = {n - 1})",
+        fontsize=11, color=GOLD, pad=10
+    )
+    fig.tight_layout()
+    fig.savefig("plot_6b_decision_path.png", dpi=150, bbox_inches="tight",
+                facecolor=DARK_BG)
+    plt.show()
+    print("✔  plot_6b_decision_path.png")
+
+
+def plot_split_frequency(rf, feature_names, top_n=8):
+    """
+    Count how many times each feature is chosen as a split, weighted by
+    the fraction of training samples that flow through each split node.
+
+    For tree t and node v:
+        weight(v) = n_node_samples[v] / n_node_samples[root]
+
+    Aggregated over all T trees and normalised:
+        SplitFreq(Xj) = (1/T) Σ_t Σ_{v ∈ V_t(Xj)}  weight(v)
+
+    Complements MDI: shows structural usage of features, not just
+    impurity reduction.
+    """
+    counts = np.zeros(len(feature_names))
+    for tree in rf.estimators_:
+        t = tree.tree_
+        n_root = t.n_node_samples[0]
+        for v in range(t.node_count):
+            if t.children_left[v] != -1:              # internal node
+                counts[t.feature[v]] += t.n_node_samples[v] / n_root
+    counts /= rf.n_estimators
+
+    df = pd.DataFrame({"feature": feature_names, "weighted_splits": counts})
+    df = df.nlargest(top_n, "weighted_splits").sort_values("weighted_splits")
+
+    fig, ax = plt.subplots(figsize=(9, 5))
+    colors  = plt.cm.viridis(np.linspace(0.3, 0.9, len(df)))
+    bars    = ax.barh(df["feature"], df["weighted_splits"], color=colors, height=0.6)
+
+    for bar, val in zip(bars, df["weighted_splits"]):
+        ax.text(val + df["weighted_splits"].max() * 0.01,
+                bar.get_y() + bar.get_height() / 2,
+                f"{val:.2f}", va="center", fontsize=8, color=MUTED)
+
+    ax.set_xlabel("Avg. weighted split frequency per tree")
+    ax.set_title("Feature Split Frequency (sample-weighted)",
+                 fontsize=12, color=GOLD, pad=10)
+    ax.grid(axis="x")
+    fig.tight_layout()
+    fig.savefig("plot_6c_split_frequency.png", dpi=150, bbox_inches="tight",
+                facecolor=DARK_BG)
+    plt.show()
+    print("✔  plot_6c_split_frequency.png\n")
+
+
+# ═══════════════════════════════════════════════════════════════════════════════
+# 7.  PROXIMITY MATRIX + MDS
+# ═══════════════════════════════════════════════════════════════════════════════
+
+def compute_proximity_matrix(rf, X, n_samples=150):
     """
     Proximity matrix (Breiman 2001):
-        P_ij = (# trees where x_i and x_j land in same leaf) / T
+        P_ij = #{trees where x_i and x_j land in same leaf} / T
 
-    P_ij ∈ [0, 1].  High proximity ⟹ structurally similar instances.
-    Useful for: outlier detection, MDS visualisation, imputation.
-
-    Complexity: O(n² * T) — subset of n_samples used for tractability.
+    P_ij ∈ [0, 1].  High proximity → structurally similar observations.
+    Vectorised outer equality avoids Python-level loops over samples.
+    Complexity: O(T · n²).
     """
-    X_sub = X.iloc[:n_samples] if hasattr(X, "iloc") else X[:n_samples]
-    # leaf indices: shape (n_samples, n_trees)
-    leaves = rf.apply(X_sub)
-    n      = len(X_sub)
+    X_sub  = X.iloc[:n_samples] if hasattr(X, "iloc") else X[:n_samples]
+    leaves = rf.apply(X_sub)                           # (n, T)
     T      = rf.n_estimators
-    prox   = np.zeros((n, n))
+    prox   = np.zeros((n_samples, n_samples))
 
     for t in range(T):
-        leaf_ids = leaves[:, t]
-        for i in range(n):
-            # vectorised: compare row i against all rows
-            prox[i] += (leaf_ids == leaf_ids[i])
+        leaf_t = leaves[:, t]
+        prox  += (leaf_t[:, None] == leaf_t[None, :]).astype(float)
 
-    prox /= T                 # normalise to [0, 1]
+    prox /= T
     np.fill_diagonal(prox, 1.0)
     return prox
 
 
-def plot_proximity_matrix(rf, X, y, n_samples=100):
-    prox = compute_proximity_matrix(rf, X, n_samples)
+def plot_proximity_and_mds(rf, X, y, n_samples=150):
+    prox  = compute_proximity_matrix(rf, X, n_samples)
+    y_sub = y[:n_samples]
 
-    fig, ax = plt.subplots(figsize=(8, 7))
+    # ── 7a. Heatmap ───────────────────────────────────────────────────────────
+    fig, ax = plt.subplots(figsize=(7, 6))
     im = ax.imshow(prox, cmap="plasma", aspect="auto", vmin=0, vmax=1)
     plt.colorbar(im, ax=ax, label="Proximity P_ij")
-    ax.set_title(f"Proximity Matrix  (n={n_samples} samples)",
-                 fontsize=12, fontweight="bold", color=ACCENT, pad=10)
+    ax.set_title(f"Proximity Matrix  (n={n_samples})",
+                 fontsize=12, color=PURPLE, pad=10)
     ax.set_xlabel("Sample index")
     ax.set_ylabel("Sample index")
     fig.tight_layout()
-    fig.savefig("plot_6_proximity_matrix.png", dpi=150, bbox_inches="tight",
-                facecolor=fig.get_facecolor())
+    fig.savefig("plot_7a_proximity_matrix.png", dpi=150, bbox_inches="tight",
+                facecolor=DARK_BG)
     plt.show()
-    print("✔  Saved: plot_6_proximity_matrix.png\n")
-    return prox
+    print("✔  plot_7a_proximity_matrix.png")
 
-
-def plot_proximity_mds(prox, y_sub):
-    """
-    Multi-Dimensional Scaling (MDS) on the proximity matrix for 2-D visualisation.
-    Converts dissimilarity (1 - P) into a 2-D embedding.
-    """
-    from sklearn.manifold import MDS
-    dissim = 1 - prox
+    # ── 7b. MDS projection ────────────────────────────────────────────────────
     mds    = MDS(n_components=2, dissimilarity="precomputed",
                  random_state=42, normalized_stress="auto")
-    coords = mds.fit_transform(dissim)
+    coords = mds.fit_transform(1 - prox)
 
     fig, ax = plt.subplots(figsize=(8, 6))
-    for label, color, name in [(0, ACCENT3, "Malignant"), (1, ACCENT2, "Benign")]:
-        mask = y_sub == label
-        ax.scatter(coords[mask, 0], coords[mask, 1],
-                   c=color, label=name, alpha=0.75, s=55, edgecolors="#ffffff22")
+    sc = ax.scatter(coords[:, 0], coords[:, 1], c=y_sub,
+                    cmap="plasma", s=55, alpha=0.8, edgecolors="#00000033")
+    plt.colorbar(sc, ax=ax, label="Median House Value ($100k)")
     ax.set_title("MDS Projection of Proximity Matrix",
-                 fontsize=12, fontweight="bold", color=ACCENT, pad=10)
+                 fontsize=12, color=PURPLE, pad=10)
     ax.set_xlabel("MDS Dimension 1")
     ax.set_ylabel("MDS Dimension 2")
-    ax.legend(framealpha=0.2, edgecolor="#444")
     ax.grid(alpha=0.3)
     fig.tight_layout()
-    fig.savefig("plot_7_proximity_mds.png", dpi=150, bbox_inches="tight",
-                facecolor=fig.get_facecolor())
+    fig.savefig("plot_7b_proximity_mds.png", dpi=150, bbox_inches="tight",
+                facecolor=DARK_BG)
     plt.show()
-    print("✔  Saved: plot_7_proximity_mds.png\n")
+    print("✔  plot_7b_proximity_mds.png\n")
 
 
 # ═══════════════════════════════════════════════════════════════════════════════
@@ -443,45 +605,39 @@ def plot_proximity_mds(prox, y_sub):
 # ═══════════════════════════════════════════════════════════════════════════════
 
 def main():
-    print("=" * 60)
-    print("  Random Forest Interpretation — Full Pipeline")
-    print("=" * 60, "\n")
+    print("=" * 62)
+    print("  Random Forest Regressor — Interpretation Pipeline")
+    print("=" * 62, "\n")
 
-    # 0. Train
-    rf, X_train, X_test, y_train, y_test, X, y, labels, feature_names = \
+    rf, X_train, X_test, y_train, y_test, X, y, feature_names = \
         load_data_and_train()
 
-    # 1. MDI importance
-    print("── 1. MDI Feature Importance ──────────────────────────────")
+    print("── 1. MDI Feature Importance ──────────────────────────────────")
     plot_mdi_importance(rf, feature_names)
 
-    # 2. Permutation importance
-    print("── 2. Permutation Importance (MDA) ────────────────────────")
+    print("── 2. Permutation Importance (MDA) ────────────────────────────")
     plot_permutation_importance(rf, X_test, y_test, feature_names)
 
-    # 3. OOB error curve
-    print("── 3. OOB Error vs. n_trees ────────────────────────────────")
-    plot_oob_error_curve(X_train, y_train)
+    print("── 3. OOB R² Curve ─────────────────────────────────────────────")
+    plot_oob_curve(X_train, y_train)
 
-    # 4. PDP + ICE
-    print("── 4. Partial Dependence + ICE ─────────────────────────────")
+    print("── 4. PDP + ICE ────────────────────────────────────────────────")
     plot_pdp_ice(rf, X_train, feature_names)
 
-    # 5. SHAP
-    print("── 5. SHAP (TreeSHAP) ──────────────────────────────────────")
+    print("── 5. SHAP (TreeSHAP) ──────────────────────────────────────────")
     plot_shap(rf, X_train, X_test, feature_names)
 
-    # 6. Proximity matrix + MDS
-    print("── 6. Proximity Matrix & MDS ───────────────────────────────")
-    n_prox = 150
-    X_sub  = X.iloc[:n_prox]
-    y_sub  = y[:n_prox]
-    prox   = plot_proximity_matrix(rf, X_sub, y_sub, n_samples=n_prox)
-    plot_proximity_mds(prox, y_sub)
+    print("── 6. Tree Split Visualisation ─────────────────────────────────")
+    plot_single_tree(rf, feature_names, tree_index=0, max_depth=3)
+    plot_decision_path(rf, X_test, feature_names, tree_index=0, sample_idx=0)
+    plot_split_frequency(rf, feature_names)
 
-    print("=" * 60)
-    print("  All plots saved. Interpretation complete.")
-    print("=" * 60)
+    print("── 7. Proximity Matrix & MDS ───────────────────────────────────")
+    plot_proximity_and_mds(rf, X, y, n_samples=150)
+
+    print("=" * 62)
+    print("  Done. All 10 plots saved to current directory.")
+    print("=" * 62)
 
 
 if __name__ == "__main__":
