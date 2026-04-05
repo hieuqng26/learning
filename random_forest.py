@@ -32,7 +32,6 @@ import pandas as pd
 import matplotlib.pyplot as plt
 import shap
 
-from sklearn.datasets import fetch_california_housing
 from sklearn.ensemble import RandomForestRegressor
 from sklearn.inspection import permutation_importance, PartialDependenceDisplay
 from sklearn.manifold import MDS
@@ -75,15 +74,53 @@ plt.rcParams.update({
 # 0.  DATA & MODEL
 # ═══════════════════════════════════════════════════════════════════════════════
 
+def generate_synthetic_data(n_samples=2000, n_features=10, random_state=42):
+    """
+    Synthetic regression dataset with controlled, interpretable structure.
+
+    Target is a non-linear combination of features plus noise:
+
+        y = 3·x0² + 2·x1·x2 − 1.5·x3 + sin(π·x4)
+            + 0.5·x5 − x6³ + exp(0.3·x7)
+            + 0·x8 + 0·x9          ← x8, x9 are pure noise features
+            + ε,   ε ~ N(0, 0.5²)
+
+    This construction guarantees:
+      • Non-linear main effects  (x0², sin, exp)
+      • Interaction term         (x1·x2)
+      • Linear effect            (x3, x5)
+      • Irrelevant features      (x8, x9) — useful to verify importances are ~0
+    """
+    rng = np.random.RandomState(random_state)
+    X   = rng.randn(n_samples, n_features)
+
+    y = (
+          3.0  * X[:, 0] ** 2
+        + 2.0  * X[:, 1] * X[:, 2]
+        - 1.5  * X[:, 3]
+        + np.sin(np.pi * X[:, 4])
+        + 0.5  * X[:, 5]
+        - 1.0  * X[:, 6] ** 3
+        + np.exp(0.3 * X[:, 7])
+        # x8, x9 → pure noise (true importance = 0)
+        + rng.randn(n_samples) * 0.5   # ε
+    )
+
+    feature_names = [f"x{i}" for i in range(n_features)]
+    X_df = pd.DataFrame(X, columns=feature_names)
+
+    print(f"  Synthetic data: {n_samples} samples × {n_features} features")
+    print(f"  y ∈ [{y.min():.2f}, {y.max():.2f}],  "
+          f"mean={y.mean():.2f},  std={y.std():.2f}")
+
+    return X_df, y, feature_names
+
+
 def load_data_and_train():
-    """
-    California Housing dataset (Pace & Barry 1997).
-    Target: median house value (in $100 000s) for California census blocks.
-    8 numeric features, 20 640 samples.
-    """
-    data = fetch_california_housing()
-    X    = pd.DataFrame(data.data, columns=data.feature_names)
-    y    = data.target
+    """Generate synthetic data and train a RandomForestRegressor."""
+    X, y, feature_names = generate_synthetic_data(
+        n_samples=2000, n_features=10, random_state=42
+    )
 
     X_train, X_test, y_train, y_test = train_test_split(
         X, y, test_size=0.2, random_state=42
@@ -102,7 +139,7 @@ def load_data_and_train():
     print(f"  Test R²  : {rf.score(X_test, y_test):.4f}")
     print(f"  OOB  R²  : {rf.oob_score_:.4f}\n")
 
-    return rf, X_train, X_test, y_train, y_test, X, y, data.feature_names
+    return rf, X_train, X_test, y_train, y_test, X, y, feature_names
 
 
 # ═══════════════════════════════════════════════════════════════════════════════
@@ -587,7 +624,7 @@ def plot_proximity_and_mds(rf, X, y, n_samples=150):
     fig, ax = plt.subplots(figsize=(8, 6))
     sc = ax.scatter(coords[:, 0], coords[:, 1], c=y_sub,
                     cmap="plasma", s=55, alpha=0.8, edgecolors="#00000033")
-    plt.colorbar(sc, ax=ax, label="Median House Value ($100k)")
+    plt.colorbar(sc, ax=ax, label="Target value (y)")
     ax.set_title("MDS Projection of Proximity Matrix",
                  fontsize=12, color=PURPLE, pad=10)
     ax.set_xlabel("MDS Dimension 1")
