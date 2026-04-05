@@ -41,32 +41,60 @@ from sklearn.tree import plot_tree
 warnings.filterwarnings("ignore")
 
 # ── Global style ──────────────────────────────────────────────────────────────
-DARK_BG  = "#0d0f18"
-PANEL_BG = "#161925"
-BORDER   = "#2e3248"
-FG       = "#dde1f0"
-MUTED    = "#8890aa"
+BG       = "#F7F9FC"   # near-white page background
+PANEL_BG = "#FFFFFF"   # pure white plot area
+BORDER   = "#D0D7E3"   # soft grey border
+FG       = "#1E2A3A"   # near-black for titles & labels
+MUTED    = "#6B7A99"   # mid-grey for tick labels & annotations
 
-PURPLE   = "#7c6aff"
-TEAL     = "#00d4aa"
-CORAL    = "#ff6b6b"
-GOLD     = "#ffd166"
+BLUE     = "#2563EB"   # primary accent
+TEAL     = "#0D9488"   # secondary accent
+CORAL    = "#E05252"   # warning / highlight
+GOLD     = "#D97706"   # tertiary accent
+PURPLE   = "#7C3AED"   # quaternary accent
 
 plt.rcParams.update({
-    "figure.facecolor": DARK_BG,
-    "axes.facecolor":   PANEL_BG,
-    "axes.edgecolor":   BORDER,
-    "axes.labelcolor":  FG,
-    "axes.titlecolor":  FG,
-    "xtick.color":      MUTED,
-    "ytick.color":      MUTED,
-    "text.color":       FG,
-    "grid.color":       BORDER,
-    "grid.linestyle":   "--",
-    "grid.alpha":       0.5,
-    "font.family":      "monospace",
-    "legend.facecolor": PANEL_BG,
-    "legend.edgecolor": BORDER,
+    # Canvas
+    "figure.facecolor"  : BG,
+    "figure.dpi"        : 120,
+    "savefig.facecolor" : BG,
+    # Axes
+    "axes.facecolor"    : PANEL_BG,
+    "axes.edgecolor"    : BORDER,
+    "axes.linewidth"    : 0.9,
+    "axes.labelcolor"   : FG,
+    "axes.titlecolor"   : FG,
+    "axes.titlesize"    : 13,
+    "axes.titleweight"  : "bold",
+    "axes.labelsize"    : 10,
+    "axes.spines.top"   : False,
+    "axes.spines.right" : False,
+    # Grid
+    "axes.grid"         : True,
+    "grid.color"        : "#E4E9F2",
+    "grid.linewidth"    : 0.7,
+    "grid.linestyle"    : "-",
+    "grid.alpha"        : 1.0,
+    # Ticks
+    "xtick.color"       : MUTED,
+    "ytick.color"       : MUTED,
+    "xtick.labelsize"   : 9,
+    "ytick.labelsize"   : 9,
+    "xtick.direction"   : "out",
+    "ytick.direction"   : "out",
+    "xtick.major.size"  : 4,
+    "ytick.major.size"  : 4,
+    # Text
+    "text.color"        : FG,
+    "font.family"       : "DejaVu Sans",
+    "font.size"         : 10,
+    # Legend
+    "legend.facecolor"  : PANEL_BG,
+    "legend.edgecolor"  : BORDER,
+    "legend.fontsize"   : 9,
+    "legend.framealpha" : 1.0,
+    # Lines
+    "lines.linewidth"   : 1.8,
 })
 
 
@@ -160,20 +188,20 @@ def plot_mdi_importance(rf, feature_names, top_n=15):
     imp = imp.nlargest(top_n).sort_values()
 
     fig, ax = plt.subplots(figsize=(9, 5))
-    colors  = plt.cm.plasma(np.linspace(0.25, 0.92, len(imp)))
+    colors  = plt.cm.Blues(np.linspace(0.35, 0.85, len(imp)))
     bars    = ax.barh(imp.index, imp.values, color=colors, height=0.65)
 
     for bar, val in zip(bars, imp.values):
         ax.text(val + imp.max() * 0.01, bar.get_y() + bar.get_height() / 2,
-                f"{val:.4f}", va="center", fontsize=8, color=MUTED)
+                f"{val:.4f}", va="center", fontsize=8, color=FG)
 
     ax.set_xlabel("Mean Decrease in Impurity (MDI)")
-    ax.set_title("Feature Importance — MDI", fontsize=13, color=PURPLE, pad=10)
+    ax.set_title("Feature Importance — MDI", fontsize=13, color=BLUE, pad=10)
     ax.set_xlim(0, imp.max() * 1.18)
     ax.grid(axis="x")
     fig.tight_layout()
     fig.savefig("plot_1_mdi_importance.png", dpi=150, bbox_inches="tight",
-                facecolor=DARK_BG)
+                facecolor=BG)
     plt.show()
     print("✔  plot_1_mdi_importance.png\n")
 
@@ -208,7 +236,7 @@ def plot_permutation_importance(rf, X_test, y_test, feature_names,
     fig, ax = plt.subplots(figsize=(9, 5))
     ypos = np.arange(len(df))
     ax.barh(ypos, df["mean"], xerr=df["std"], color=TEAL, alpha=0.85, height=0.6,
-            error_kw=dict(ecolor="#ffffff44", capsize=3))
+            error_kw=dict(ecolor="#AABBCC", capsize=3))
     ax.set_yticks(ypos)
     ax.set_yticklabels(df["feature"], fontsize=8)
     ax.set_xlabel(f"Mean R² Decrease ± SD  (n_repeats={n_repeats})")
@@ -216,7 +244,7 @@ def plot_permutation_importance(rf, X_test, y_test, feature_names,
     ax.grid(axis="x")
     fig.tight_layout()
     fig.savefig("plot_2_permutation_importance.png", dpi=150, bbox_inches="tight",
-                facecolor=DARK_BG)
+                facecolor=BG)
     plt.show()
     print("✔  plot_2_permutation_importance.png\n")
 
@@ -250,20 +278,20 @@ def plot_oob_curve(X_train, y_train, max_trees=300, step=10):
 
     fig, ax = plt.subplots(figsize=(9, 4))
     ax.plot(list(n_range), oob_r2s, color=CORAL, lw=2.5)
-    ax.fill_between(list(n_range), oob_r2s, alpha=0.12, color=CORAL)
-    ax.axvline(best_n, color="#ffffff44", linestyle="--", lw=1.2)
+    ax.fill_between(list(n_range), oob_r2s, alpha=0.18, color=CORAL)
+    ax.axvline(best_n, color="#AABBCC", linestyle="--", lw=1.2)
     ax.annotate(f"max OOB R² = {best_r2:.4f}\n@ {best_n} trees",
                 xy=(best_n, best_r2),
                 xytext=(best_n + 20, best_r2 - 0.012),
                 color=FG, fontsize=9,
-                arrowprops=dict(arrowstyle="->", color="#ffffff66"))
+                arrowprops=dict(arrowstyle="->", color=MUTED))
     ax.set_xlabel("Number of Trees")
     ax.set_ylabel("OOB R²")
     ax.set_title("OOB R² vs. Number of Trees", fontsize=13, color=CORAL, pad=10)
     ax.grid()
     fig.tight_layout()
     fig.savefig("plot_3_oob_curve.png", dpi=150, bbox_inches="tight",
-                facecolor=DARK_BG)
+                facecolor=BG)
     plt.show()
     print(f"✔  plot_3_oob_curve.png  (best={best_n} trees, OOB R²={best_r2:.4f})\n")
 
@@ -297,12 +325,12 @@ def plot_pdp_ice(rf, X_train, feature_names):
             n_jobs      = -1,
             random_state= 42,
             ax          = ax,
-            ice_lines_kw= {"color": PURPLE, "alpha": 0.06, "lw": 0.7},
+            ice_lines_kw= {"color": BLUE, "alpha": 0.08, "lw": 0.6},
             pd_line_kw  = {"color": TEAL,   "lw": 2.5},
         )
         ax.set_title(feat, fontsize=9, color=FG)
         ax.set_facecolor(PANEL_BG)
-        ax.tick_params(colors=MUTED, labelsize=7)
+        ax.tick_params(labelsize=7)
         ax.set_ylabel("Predicted value", fontsize=7)
         ax.grid(alpha=0.3)
 
@@ -312,7 +340,7 @@ def plot_pdp_ice(rf, X_train, feature_names):
     )
     fig.tight_layout()
     fig.savefig("plot_4_pdp_ice.png", dpi=150, bbox_inches="tight",
-                facecolor=DARK_BG)
+                facecolor=BG)
     plt.show()
     print("✔  plot_4_pdp_ice.png\n")
 
@@ -425,8 +453,8 @@ def plot_single_tree(rf, feature_names, tree_index=0, max_depth=3):
     Colour intensity maps to predicted value (lighter = lower, darker = higher).
     """
     tree = rf.estimators_[tree_index]
-    fig, ax = plt.subplots(figsize=(22, 8), facecolor=DARK_BG)
-    ax.set_facecolor(DARK_BG)
+    fig, ax = plt.subplots(figsize=(22, 8), facecolor=BG)
+    ax.set_facecolor(BG)
 
     plot_tree(
         tree,
@@ -446,7 +474,7 @@ def plot_single_tree(rf, feature_names, tree_index=0, max_depth=3):
     )
     fig.tight_layout()
     fig.savefig("plot_6a_single_tree.png", dpi=150, bbox_inches="tight",
-                facecolor=DARK_BG)
+                facecolor=BG)
     plt.show()
     print("✔  plot_6a_single_tree.png")
 
@@ -501,12 +529,12 @@ def plot_decision_path(rf, X_test, feature_names, tree_index=0, sample_idx=0):
     for i, rec in enumerate(records):
         y       = n - i
         is_leaf = rec["type"] == "LEAF"
-        border  = TEAL if is_leaf else PURPLE
+        border  = TEAL if is_leaf else BLUE
         ax.text(5, y, rec["label"],
                 ha="center", va="center", fontsize=9, color=FG,
                 fontfamily="monospace",
                 bbox=dict(boxstyle="round,pad=0.5",
-                          facecolor=PANEL_BG, edgecolor=border, lw=1.8))
+                          facecolor="#F0F4FF", edgecolor=border, lw=1.8))
         if i < n - 1:
             went_left  = records[i].get("left", True)
             arr_color  = TEAL if went_left else CORAL
@@ -520,7 +548,7 @@ def plot_decision_path(rf, X_test, feature_names, tree_index=0, sample_idx=0):
     )
     fig.tight_layout()
     fig.savefig("plot_6b_decision_path.png", dpi=150, bbox_inches="tight",
-                facecolor=DARK_BG)
+                facecolor=BG)
     plt.show()
     print("✔  plot_6b_decision_path.png")
 
@@ -552,13 +580,13 @@ def plot_split_frequency(rf, feature_names, top_n=8):
     df = df.nlargest(top_n, "weighted_splits").sort_values("weighted_splits")
 
     fig, ax = plt.subplots(figsize=(9, 5))
-    colors  = plt.cm.viridis(np.linspace(0.3, 0.9, len(df)))
+    colors  = plt.cm.YlOrBr(np.linspace(0.25, 0.85, len(df)))
     bars    = ax.barh(df["feature"], df["weighted_splits"], color=colors, height=0.6)
 
     for bar, val in zip(bars, df["weighted_splits"]):
         ax.text(val + df["weighted_splits"].max() * 0.01,
                 bar.get_y() + bar.get_height() / 2,
-                f"{val:.2f}", va="center", fontsize=8, color=MUTED)
+                f"{val:.2f}", va="center", fontsize=8, color=FG)
 
     ax.set_xlabel("Avg. weighted split frequency per tree")
     ax.set_title("Feature Split Frequency (sample-weighted)",
@@ -566,7 +594,7 @@ def plot_split_frequency(rf, feature_names, top_n=8):
     ax.grid(axis="x")
     fig.tight_layout()
     fig.savefig("plot_6c_split_frequency.png", dpi=150, bbox_inches="tight",
-                facecolor=DARK_BG)
+                facecolor=BG)
     plt.show()
     print("✔  plot_6c_split_frequency.png\n")
 
@@ -604,15 +632,15 @@ def plot_proximity_and_mds(rf, X, y, n_samples=150):
 
     # ── 7a. Heatmap ───────────────────────────────────────────────────────────
     fig, ax = plt.subplots(figsize=(7, 6))
-    im = ax.imshow(prox, cmap="plasma", aspect="auto", vmin=0, vmax=1)
+    im = ax.imshow(prox, cmap="YlGnBu", aspect="auto", vmin=0, vmax=1)
     plt.colorbar(im, ax=ax, label="Proximity P_ij")
     ax.set_title(f"Proximity Matrix  (n={n_samples})",
-                 fontsize=12, color=PURPLE, pad=10)
+                 fontsize=12, color=BLUE, pad=10)
     ax.set_xlabel("Sample index")
     ax.set_ylabel("Sample index")
     fig.tight_layout()
     fig.savefig("plot_7a_proximity_matrix.png", dpi=150, bbox_inches="tight",
-                facecolor=DARK_BG)
+                facecolor=BG)
     plt.show()
     print("✔  plot_7a_proximity_matrix.png")
 
@@ -623,16 +651,16 @@ def plot_proximity_and_mds(rf, X, y, n_samples=150):
 
     fig, ax = plt.subplots(figsize=(8, 6))
     sc = ax.scatter(coords[:, 0], coords[:, 1], c=y_sub,
-                    cmap="plasma", s=55, alpha=0.8, edgecolors="#00000033")
+                    cmap="RdYlBu_r", s=55, alpha=0.8, edgecolors="#CCCCCC", linewidths=0.4)
     plt.colorbar(sc, ax=ax, label="Target value (y)")
     ax.set_title("MDS Projection of Proximity Matrix",
-                 fontsize=12, color=PURPLE, pad=10)
+                 fontsize=12, color=BLUE, pad=10)
     ax.set_xlabel("MDS Dimension 1")
     ax.set_ylabel("MDS Dimension 2")
     ax.grid(alpha=0.3)
     fig.tight_layout()
     fig.savefig("plot_7b_proximity_mds.png", dpi=150, bbox_inches="tight",
-                facecolor=DARK_BG)
+                facecolor=BG)
     plt.show()
     print("✔  plot_7b_proximity_mds.png\n")
 
