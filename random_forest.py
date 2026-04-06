@@ -690,7 +690,7 @@ def main():
     plot_pdp_ice(rf, X_train, feature_names)
 
     print("── 5. SHAP (TreeSHAP) ──────────────────────────────────────────")
-    plot_shap(rf, X_train, X_test, feature_names)
+    sv = plot_shap(rf, X_train, X_test, feature_names)
 
     print("── 6. Tree Split Visualisation ─────────────────────────────────")
     plot_single_tree(rf, feature_names, tree_index=0, max_depth=3)
@@ -700,10 +700,495 @@ def main():
     print("── 7. Proximity Matrix & MDS ───────────────────────────────────")
     plot_proximity_and_mds(rf, X, y, n_samples=150)
 
+    print("── 8. Logical Split Explanations ───────────────────────────────")
+    direction_df = plot_feature_directions(
+        sv, X_test, feature_names, target_name="y", predictor_label="feature"
+    )
+    rules = extract_all_rules(rf, feature_names, max_depth=3, max_trees=20)
+    plot_rule_table(rules, feature_names, direction_df, target_name="y", top_n=8)
+    slope_df, pdp_curves = plot_pdp_slopes(rf, X_train, feature_names, target_name="y")
+    plot_pdp_annotated(pdp_curves, slope_df, feature_names, target_name="y")
+    print_narrative_summary(direction_df, slope_df, feature_names, target_name="y")
+
     print("=" * 62)
-    print("  Done. All 10 plots saved to current directory.")
+    print("  Done. All plots saved to current directory.")
     print("=" * 62)
 
+
+if __name__ == "__main__":
+    main()
+
+# ═══════════════════════════════════════════════════════════════════════════════
+# 8.  LOGICAL SPLIT EXPLANATIONS
+#     — "If real GDP rises, the model predicts interest rates rise"
+# ═══════════════════════════════════════════════════════════════════════════════
+
+# ── 8a. Feature Direction Analysis ──────────────────────────────────────────
+
+def compute_feature_directions(sv, X_test, feature_names):
+    """
+    Determine the causal direction of each feature on the prediction
+    using Spearman rank correlation between feature values and SHAP values.
+
+    Rationale (Lundberg et al. 2020):
+      φ_j(x) is the marginal contribution of feature j to prediction f(x).
+      If ρ_S(x_j, φ_j) > 0  →  higher x_j pushes the prediction UP.
+      If ρ_S(x_j, φ_j) < 0  →  higher x_j pushes the prediction DOWN.
+      If ρ_S(x_j, φ_j) ≈ 0  →  non-monotonic or negligible effect.
+
+    Spearman (not Pearson) is used because tree-based SHAP effects are
+    often non-linear — rank correlation captures monotonic relationships
+    without assuming linearity.
+
+    Returns a DataFrame sorted by absolute effect strength.
+    """
+    from scipy.stats import spearmanr
+
+    rows = []
+    for i, feat in enumerate(feature_names):
+        rho, pval = spearmanr(X_test.iloc[:, i].values, sv[:, i])
+        rows.append({
+            "feature"    : feat,
+            "rho"        : rho,          # Spearman ρ ∈ [−1, +1]
+            "pval"       : pval,
+            "direction"  : "positive" if rho > 0 else "negative",
+            "significant": pval < 0.05,
+        })
+
+    return pd.DataFrame(rows).sort_values("rho")
+
+
+def plot_feature_directions(sv, X_test, feature_names,
+                            target_name="y", predictor_label="feature"):
+    """
+    Diverging bar chart of Spearman ρ between each feature and its SHAP value.
+
+    Positive bar  →  feature ↑  causes prediction ↑
+    Negative bar  →  feature ↑  causes prediction ↓
+    Hatched bar   →  not statistically significant (p ≥ 0.05)
+
+    The magnitude of ρ reflects how consistently monotonic the relationship is,
+    not the size of the effect (use SHAP mean |φ_j| for that).
+    """
+    df = compute_feature_directions(sv, X_test, feature_names)
+
+    colors = [BLUE if r > 0 else CORAL for r in df["rho"]]
+    hatches = ["" if sig else "///" for sig in df["significant"]]
+
+    fig, ax = plt.subplots(figsize=(10, 6))
+    ypos  = np.arange(len(df))
+    bars  = ax.barh(ypos, df["rho"], color=colors, height=0.6,
+                    edgecolor=BORDER, linewidth=0.8)
+    for bar, hatch in zip(bars, hatches):
+        bar.set_hatch(hatch)
+
+    ax.set_yticks(ypos)
+    ax.set_yticklabels(df["feature"], fontsize=10)
+    ax.axvline(0, color=FG, linewidth=1.1, linestyle="-")
+    ax.set_xlabel("Spearman ρ  (feature value vs. SHAP value)", fontsize=10)
+    ax.set_title(
+        f"Feature Direction Analysis\n"
+        f"Blue = {predictor_label} ↑ → {target_name} ↑     "
+        f"Red = {predictor_label} ↑ → {target_name} ↓     "
+        f"/// = not significant (p ≥ 0.05)",
+        fontsize=11, color=FG, pad=12
+    )
+    ax.set_xlim(-1.15, 1.15)
+
+    # Annotate ρ values
+    for i, (rho, sig) in enumerate(zip(df["rho"], df["significant"])):
+        sign = "★" if sig else ""
+        ax.text(rho + (0.03 if rho >= 0 else -0.03), i,
+                f"{rho:+.2f}{sign}", va="center",
+                ha="left" if rho >= 0 else "right",
+                fontsize=8, color=FG)
+
+    ax.grid(axis="x")
+    fig.tight_layout()
+    fig.savefig("plot_8a_feature_directions.png", dpi=150, bbox_inches="tight",
+                facecolor=BG)
+    plt.show()
+    print("✔  plot_8a_feature_directions.png")
+
+    return df
+
+
+# ── 8b. Rule Extraction ───────────────────────────────────────────────────────
+
+def extract_all_rules(rf, feature_names, max_depth=3, max_trees=10):
+    """
+    Extract every root-to-leaf path from the first max_trees trees as
+    a list of dicts:
+        { conditions: [...], prediction: float, n_samples: int, tree: int }
+
+    Each condition is a dict:
+        { feature, threshold, direction, split_str }
+    where direction is "low" (≤ threshold) or "high" (> threshold).
+
+    Limited to max_depth levels for readability.
+    """
+    all_rules = []
+
+    for tree_idx, estimator in enumerate(rf.estimators_[:max_trees]):
+        t = estimator.tree_
+
+        def recurse(node, conditions, depth):
+            if depth > max_depth or t.children_left[node] == -1:
+                all_rules.append({
+                    "tree"        : tree_idx,
+                    "conditions"  : list(conditions),
+                    "prediction"  : float(t.value[node][0][0]),
+                    "n_samples"   : int(t.n_node_samples[node]),
+                    "mse"         : float(t.impurity[node]),
+                })
+                return
+            feat   = feature_names[t.feature[node]]
+            thresh = t.threshold[node]
+            recurse(t.children_left[node],
+                    conditions + [{"feature": feat, "threshold": thresh,
+                                   "direction": "low",
+                                   "split_str": f"{feat} ≤ {thresh:.3f}"}],
+                    depth + 1)
+            recurse(t.children_right[node],
+                    conditions + [{"feature": feat, "threshold": thresh,
+                                   "direction": "high",
+                                   "split_str": f"{feat} > {thresh:.3f}"}],
+                    depth + 1)
+
+        recurse(0, [], 0)
+
+    return all_rules
+
+
+def rules_to_narrative(rules, feature_names, direction_df,
+                        target_name="y", top_n=10):
+    """
+    Convert extracted decision rules into plain-English narratives.
+
+    Each condition in a rule is enriched with economic/domain direction:
+      "x0 > 1.2"  →  "x0 is HIGH (above 1.200)"
+    Then combined with the SHAP direction label to produce:
+      "When x0 is HIGH → model predicts y INCREASES"
+
+    Rules are ranked by |prediction − global_mean| so the most
+    extreme (most interesting) rules surface first.
+
+    Returns a list of narrative strings.
+    """
+    global_mean = np.mean([r["prediction"] for r in rules])
+
+    dir_map = dict(zip(direction_df["feature"], direction_df["direction"]))
+
+    def condition_to_text(cond):
+        feat      = cond["feature"]
+        direction = cond["direction"]        # "low" or "high"
+        thresh    = cond["threshold"]
+        level     = "HIGH" if direction == "high" else "LOW"
+        return f"{feat} is {level} (threshold {thresh:.3f})"
+
+    narratives = []
+    for rule in sorted(rules,
+                       key=lambda r: abs(r["prediction"] - global_mean),
+                       reverse=True)[:top_n]:
+        cond_texts = [condition_to_text(c) for c in rule["conditions"]]
+        pred       = rule["prediction"]
+        pred_dir   = "↑ ABOVE" if pred > global_mean else "↓ BELOW"
+        narrative  = (
+            "IF   " + "\n AND ".join(cond_texts) + "\n"
+            f"THEN {target_name} is predicted {pred_dir} average "
+            f"(predicted = {pred:.3f},  global mean = {global_mean:.3f})\n"
+            f"     [covers {rule['n_samples']} samples in tree #{rule['tree']}]"
+        )
+        narratives.append(narrative)
+
+    return narratives
+
+
+def plot_rule_table(rules, feature_names, direction_df,
+                    target_name="y", top_n=8):
+    """
+    Visualise the top decision rules as a colour-coded table.
+
+    Each row = one rule. Columns = split conditions + predicted value.
+    Cell colour:
+      Blue  = condition where feature is HIGH
+      Red   = condition where feature is LOW
+      Green = prediction above global mean
+      Pink  = prediction below global mean
+    """
+    global_mean = np.mean([r["prediction"] for r in rules])
+    top_rules   = sorted(rules,
+                         key=lambda r: abs(r["prediction"] - global_mean),
+                         reverse=True)[:top_n]
+
+    max_conds = max(len(r["conditions"]) for r in top_rules)
+    col_labels = [f"Condition {i+1}" for i in range(max_conds)] + ["Prediction"]
+
+    cell_text   = []
+    cell_colors = []
+
+    for rule in top_rules:
+        row_text   = []
+        row_colors = []
+        for i in range(max_conds):
+            if i < len(rule["conditions"]):
+                c     = rule["conditions"][i]
+                label = f"{c['feature']} {'>' if c['direction']=='high' else '≤'} {c['threshold']:.3f}"
+                color = "#DBEAFE" if c["direction"] == "high" else "#FEE2E2"
+            else:
+                label = "—"
+                color = "#F9FAFB"
+            row_text.append(label)
+            row_colors.append(color)
+
+        pred_val   = rule["prediction"]
+        pred_label = f"{pred_val:.3f}"
+        pred_color = "#D1FAE5" if pred_val > global_mean else "#FCE7F3"
+        row_text.append(pred_label)
+        row_colors.append(pred_color)
+
+        cell_text.append(row_text)
+        cell_colors.append(row_colors)
+
+    fig_h = max(4, top_n * 0.55 + 1.5)
+    fig, ax = plt.subplots(figsize=(max(12, max_conds * 3.5), fig_h))
+    ax.axis("off")
+
+    tbl = ax.table(
+        cellText    = cell_text,
+        cellColours = cell_colors,
+        colLabels   = col_labels,
+        loc         = "center",
+        cellLoc     = "center",
+    )
+    tbl.auto_set_font_size(False)
+    tbl.set_fontsize(9)
+    tbl.scale(1, 1.6)
+
+    # Style header row
+    for j in range(len(col_labels)):
+        tbl[0, j].set_facecolor("#1E3A5F")
+        tbl[0, j].set_text_props(color="white", fontweight="bold")
+
+    ax.set_title(
+        f"Top {top_n} Decision Rules by Deviation from Mean\n"
+        f"Blue cells = feature HIGH   |   Red cells = feature LOW   |   "
+        f"Green prediction = above mean ({global_mean:.3f})   |   Pink = below",
+        fontsize=10, color=FG, pad=14, loc="left"
+    )
+    fig.tight_layout()
+    fig.savefig("plot_8b_rule_table.png", dpi=150, bbox_inches="tight",
+                facecolor=BG)
+    plt.show()
+    print("✔  plot_8b_rule_table.png")
+
+
+# ── 8c. PDP Slope Chart ───────────────────────────────────────────────────────
+
+def plot_pdp_slopes(rf, X_train, feature_names,
+                   target_name="y", n_points=60):
+    """
+    Quantify and visualise the direction and shape of each feature's
+    marginal effect by computing PDP slopes.
+
+    For feature j with grid points [x_min, ..., x_max]:
+        slope_j = (PDP(x_max) − PDP(x_min)) / (x_max − x_min)
+
+    A positive slope → feature ↑ causes prediction ↑  (on average).
+    A negative slope → feature ↑ causes prediction ↓.
+
+    Non-linearity index:
+        NL_j = std(Δ PDP) / |mean(Δ PDP)|
+    High NL → the effect reverses or accelerates across the feature range.
+
+    This directly answers "if real GDP rises, does interest rate rise?"
+    using the model's learned marginal response.
+    """
+    from sklearn.inspection import partial_dependence
+
+    slopes      = []
+    nl_indices  = []
+    pdp_curves  = {}
+
+    for feat in feature_names:
+        idx    = list(feature_names).index(feat)
+        result = partial_dependence(rf, X_train, features=[idx],
+                                    grid_resolution=n_points, kind="average")
+        grid   = result["grid_values"][0]
+        avg    = result["average"][0]
+
+        delta     = np.diff(avg)
+        slope     = (avg[-1] - avg[0]) / (grid[-1] - grid[0])
+        nl        = (np.std(delta) / (abs(np.mean(delta)) + 1e-9))
+        slopes.append(slope)
+        nl_indices.append(nl)
+        pdp_curves[feat] = (grid, avg)
+
+    df = pd.DataFrame({
+        "feature"       : list(feature_names),
+        "slope"         : slopes,
+        "nonlinearity"  : nl_indices,
+    }).sort_values("slope")
+
+    # ── Plot 1: slope bar chart ───────────────────────────────────────────────
+    fig, axes = plt.subplots(1, 2, figsize=(14, 6),
+                             gridspec_kw={"width_ratios": [1.4, 1]})
+
+    ax = axes[0]
+    colors  = [BLUE if s > 0 else CORAL for s in df["slope"]]
+    ypos    = np.arange(len(df))
+    ax.barh(ypos, df["slope"], color=colors, height=0.6,
+            edgecolor=BORDER, linewidth=0.7)
+    ax.set_yticks(ypos)
+    ax.set_yticklabels(df["feature"], fontsize=10)
+    ax.axvline(0, color=FG, lw=1.0)
+    ax.set_xlabel(f"PDP slope  (Δ {target_name} / Δ feature)")
+    ax.set_title(f"Marginal Effect Direction\n"
+                 f"Blue = {target_name} rises with feature  |  "
+                 f"Red = {target_name} falls",
+                 fontsize=11, color=FG)
+
+    for i, (s, feat) in enumerate(zip(df["slope"], df["feature"])):
+        ax.text(s + (abs(df["slope"].max()) * 0.02 if s >= 0
+                     else -abs(df["slope"].max()) * 0.02),
+                i, f"{s:+.4f}", va="center",
+                ha="left" if s >= 0 else "right",
+                fontsize=8, color=FG)
+
+    # ── Plot 2: non-linearity scatter ─────────────────────────────────────────
+    ax2 = axes[1]
+    x2  = df["slope"].values
+    y2  = df["nonlinearity"].values
+    sc  = ax2.scatter(x2, y2, c=[BLUE if s > 0 else CORAL for s in x2],
+                      s=90, edgecolors=BORDER, linewidths=0.8, zorder=3)
+    for _, row in df.iterrows():
+        ax2.annotate(row["feature"],
+                     xy=(row["slope"], row["nonlinearity"]),
+                     xytext=(5, 3), textcoords="offset points",
+                     fontsize=8, color=MUTED)
+    ax2.axvline(0, color=FG, lw=0.8, linestyle="--")
+    ax2.set_xlabel(f"PDP slope")
+    ax2.set_ylabel("Non-linearity index  (high = effect changes direction)")
+    ax2.set_title("Effect Shape\nLinear vs. Non-linear", fontsize=11, color=FG)
+    ax2.grid(True, alpha=0.5)
+
+    fig.suptitle(
+        f"How does each feature affect {target_name}? — PDP Slope Analysis",
+        fontsize=13, color=FG, y=1.01, fontweight="bold"
+    )
+    fig.tight_layout()
+    fig.savefig("plot_8c_pdp_slopes.png", dpi=150, bbox_inches="tight",
+                facecolor=BG)
+    plt.show()
+    print("✔  plot_8c_pdp_slopes.png")
+
+    return df, pdp_curves
+
+
+def plot_pdp_annotated(pdp_curves, slope_df, feature_names,
+                       target_name="y", cols=3):
+    """
+    Plot each feature's PDP curve annotated with:
+      • A directional arrow showing overall slope
+      • Shading where the curve is rising vs. falling
+      • The slope value in the subtitle
+
+    This makes each plot self-contained and readable in isolation,
+    e.g. for inclusion in reports or slides.
+    """
+    n    = len(feature_names)
+    rows = int(np.ceil(n / cols))
+    fig, axes = plt.subplots(rows, cols,
+                             figsize=(cols * 4.5, rows * 3.5))
+    axes = axes.flatten()
+
+    slope_map = dict(zip(slope_df["feature"], slope_df["slope"]))
+    nl_map    = dict(zip(slope_df["feature"], slope_df["nonlinearity"]))
+
+    for ax, feat in zip(axes, feature_names):
+        grid, avg = pdp_curves[feat]
+        slope     = slope_map[feat]
+        nl        = nl_map[feat]
+        color     = BLUE if slope > 0 else CORAL
+        arrow     = "↑" if slope > 0 else "↓"
+
+        ax.plot(grid, avg, color=color, lw=2.2, zorder=3)
+
+        # Shade rising vs. falling segments
+        for i in range(len(avg) - 1):
+            seg_color = BLUE if avg[i+1] >= avg[i] else CORAL
+            ax.fill_between(grid[i:i+2], avg[i:i+2],
+                            alpha=0.12, color=seg_color)
+
+        # Reference mean line
+        ax.axhline(np.mean(avg), color=MUTED, lw=0.9,
+                   linestyle="--", label=f"mean={np.mean(avg):.3f}")
+
+        ax.set_title(
+            f"{feat}  {arrow}  (slope={slope:+.3f}, NL={nl:.2f})",
+            fontsize=9, color=color
+        )
+        ax.set_xlabel(feat, fontsize=8)
+        ax.set_ylabel(target_name, fontsize=8)
+        ax.tick_params(labelsize=7)
+        ax.grid(True, alpha=0.4)
+
+    # Hide empty subplots
+    for ax in axes[n:]:
+        ax.set_visible(False)
+
+    fig.suptitle(
+        f"PDP Curves — How each feature shifts the predicted {target_name}\n"
+        f"Blue = rising effect  |  Red = falling effect  |  NL = non-linearity index",
+        fontsize=11, color=FG, y=1.01
+    )
+    fig.tight_layout()
+    fig.savefig("plot_8d_pdp_annotated.png", dpi=150, bbox_inches="tight",
+                facecolor=BG)
+    plt.show()
+    print("✔  plot_8d_pdp_annotated.png\n")
+
+
+# ── 8e. Narrative summary ─────────────────────────────────────────────────────
+
+def print_narrative_summary(direction_df, slope_df, feature_names,
+                             target_name="y", predictor_label="feature"):
+    """
+    Print a plain-English summary table of every feature's effect,
+    combining:
+      • SHAP-based direction (sign of Spearman ρ between x and φ)
+      • PDP-based direction  (sign of overall PDP slope)
+      • Agreement flag       (both methods agree?)
+      • Non-linearity index  (is the effect consistent or shape-shifting?)
+    """
+    shap_dir  = dict(zip(direction_df["feature"], direction_df["direction"]))
+    shap_rho  = dict(zip(direction_df["feature"], direction_df["rho"]))
+    shap_sig  = dict(zip(direction_df["feature"], direction_df["significant"]))
+    pdp_slope = dict(zip(slope_df["feature"],     slope_df["slope"]))
+    pdp_nl    = dict(zip(slope_df["feature"],     slope_df["nonlinearity"]))
+
+    header = (f"\n{'─'*74}\n"
+              f"  LOGICAL EFFECT SUMMARY  →  how each feature affects '{target_name}'\n"
+              f"{'─'*74}")
+    print(header)
+    print(f"  {'Feature':<12} {'SHAP dir':>10} {'PDP slope':>10} "
+          f"{'Agree':>6} {'Significant':>12} {'Non-linear':>11}")
+    print(f"  {'─'*12} {'─'*10} {'─'*10} {'─'*6} {'─'*12} {'─'*11}")
+
+    for feat in sorted(feature_names,
+                       key=lambda f: abs(shap_rho[f]), reverse=True):
+        s_dir  = "↑ rises"  if shap_dir[feat] == "positive" else "↓ falls"
+        p_dir  = "↑ rises"  if pdp_slope[feat] > 0           else "↓ falls"
+        agree  = "✔" if shap_dir[feat] == ("positive" if pdp_slope[feat] > 0
+                                            else "negative") else "✘"
+        sig    = "★ yes"    if shap_sig[feat]                else "  no"
+        nl_lvl = ("high" if pdp_nl[feat] > 2.0 else
+                  "medium" if pdp_nl[feat] > 0.5 else "low")
+        print(f"  {feat:<12} {s_dir:>10} {p_dir:>10} "
+              f"{agree:>6} {sig:>12} {nl_lvl:>11}")
+
+    print(f"{'─'*74}")
+    print("  ★ = significant at p < 0.05  |  NL high = non-monotonic effect\n")
 
 if __name__ == "__main__":
     main()
