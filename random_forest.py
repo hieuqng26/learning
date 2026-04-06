@@ -311,7 +311,29 @@ def plot_pdp_ice(rf, X_train, feature_names):
 
     ⚠ Both assume feature independence. With correlated features consider
       ALE plots (Apley & Zhu 2020) as a more robust alternative.
+
+    ── Threading note ──────────────────────────────────────────────────────────
+    Error: "main thread is not in main loop"
+
+    Root cause: PartialDependenceDisplay uses joblib (n_jobs > 1) to compute
+    PDP/ICE curves in parallel background threads. Those threads occasionally
+    call back into matplotlib, which tries to update its GUI event loop (Tkinter
+    by default). Tkinter's event loop is not thread-safe and raises this error
+    when accessed from any thread other than the main one.
+
+    Fix: temporarily switch to the 'Agg' backend (non-interactive, no event
+    loop) before computing PDPs, then restore the original backend afterwards.
+    Agg renders to an in-memory buffer with no GUI involvement, so background
+    threads can safely call into it.
+
+    Alternatively, setting n_jobs=1 avoids the issue by removing threading
+    entirely, at the cost of slower computation on large datasets.
+    ────────────────────────────────────────────────────────────────────────────
     """
+    import matplotlib
+    _orig_backend = matplotlib.get_backend()
+    matplotlib.use("Agg")           # no GUI event loop → thread-safe
+
     imp  = pd.Series(rf.feature_importances_, index=feature_names)
     top4 = imp.nlargest(4).index.tolist()
 
@@ -322,11 +344,11 @@ def plot_pdp_ice(rf, X_train, feature_names):
             rf, X_train, features=[idx],
             kind        = "both",
             subsample   = 200,
-            n_jobs      = -1,
+            n_jobs      = -1,       # parallel — safe now that backend is Agg
             random_state= 42,
             ax          = ax,
             ice_lines_kw= {"color": BLUE, "alpha": 0.08, "lw": 0.6},
-            pd_line_kw  = {"color": TEAL,   "lw": 2.5},
+            pd_line_kw  = {"color": TEAL, "lw": 2.5},
         )
         ax.set_title(feat, fontsize=9, color=FG)
         ax.set_facecolor(PANEL_BG)
@@ -335,13 +357,15 @@ def plot_pdp_ice(rf, X_train, feature_names):
         ax.grid(alpha=0.3)
 
     fig.suptitle(
-        "Partial Dependence (teal) + ICE (purple) — Top 4 Features",
+        "Partial Dependence (teal) + ICE (blue) — Top 4 Features",
         fontsize=11, color=TEAL, y=1.01
     )
     fig.tight_layout()
     fig.savefig("plot_4_pdp_ice.png", dpi=150, bbox_inches="tight",
                 facecolor=BG)
-    plt.show()
+    plt.close(fig)                  # must close before switching backend back
+
+    matplotlib.use(_orig_backend)   # restore original backend for other plots
     print("✔  plot_4_pdp_ice.png\n")
 
 
