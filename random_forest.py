@@ -31,6 +31,7 @@ import numpy as np
 import pandas as pd
 import matplotlib.pyplot as plt
 import shap
+from pathlib import Path
 
 from sklearn.ensemble import RandomForestRegressor
 from sklearn.inspection import permutation_importance, PartialDependenceDisplay
@@ -39,6 +40,10 @@ from sklearn.model_selection import train_test_split
 from sklearn.tree import plot_tree
 
 warnings.filterwarnings("ignore")
+
+OUTPUT_DIR = Path("output/rf")
+OUTPUT_DIR.mkdir(parents=True, exist_ok=True)
+
 
 # ── Global style ──────────────────────────────────────────────────────────────
 BG       = "#F7F9FC"   # near-white page background
@@ -200,7 +205,7 @@ def plot_mdi_importance(rf, feature_names, top_n=15):
     ax.set_xlim(0, imp.max() * 1.18)
     ax.grid(axis="x")
     fig.tight_layout()
-    fig.savefig("plot_1_mdi_importance.png", dpi=150, bbox_inches="tight",
+    fig.savefig(OUTPUT_DIR / "plot_1_mdi_importance.png", dpi=150, bbox_inches="tight",
                 facecolor=BG)
     plt.show()
     print("✔  plot_1_mdi_importance.png\n")
@@ -243,7 +248,7 @@ def plot_permutation_importance(rf, X_test, y_test, feature_names,
     ax.set_title("Permutation Importance (MDA)", fontsize=13, color=TEAL, pad=10)
     ax.grid(axis="x")
     fig.tight_layout()
-    fig.savefig("plot_2_permutation_importance.png", dpi=150, bbox_inches="tight",
+    fig.savefig(OUTPUT_DIR / "plot_2_permutation_importance.png", dpi=150, bbox_inches="tight",
                 facecolor=BG)
     plt.show()
     print("✔  plot_2_permutation_importance.png\n")
@@ -290,7 +295,7 @@ def plot_oob_curve(X_train, y_train, max_trees=300, step=10):
     ax.set_title("OOB R² vs. Number of Trees", fontsize=13, color=CORAL, pad=10)
     ax.grid()
     fig.tight_layout()
-    fig.savefig("plot_3_oob_curve.png", dpi=150, bbox_inches="tight",
+    fig.savefig(OUTPUT_DIR / "plot_3_oob_curve.png", dpi=150, bbox_inches="tight",
                 facecolor=BG)
     plt.show()
     print(f"✔  plot_3_oob_curve.png  (best={best_n} trees, OOB R²={best_r2:.4f})\n")
@@ -361,7 +366,7 @@ def plot_pdp_ice(rf, X_train, feature_names):
         fontsize=11, color=TEAL, y=1.01
     )
     fig.tight_layout()
-    fig.savefig("plot_4_pdp_ice.png", dpi=150, bbox_inches="tight",
+    fig.savefig(OUTPUT_DIR / "plot_4_pdp_ice.png", dpi=150, bbox_inches="tight",
                 facecolor=BG)
     plt.close(fig)                  # must close before switching backend back
 
@@ -416,7 +421,7 @@ def plot_shap(rf, X_train, X_test, feature_names):
     plt.gca().set_title("SHAP Summary — Beeswarm",
                          fontsize=12, color=PURPLE, pad=10)
     plt.tight_layout()
-    plt.savefig("plot_5a_shap_beeswarm.png", dpi=150, bbox_inches="tight")
+    plt.savefig(OUTPUT_DIR / "plot_5a_shap_beeswarm.png", dpi=150, bbox_inches="tight")
     plt.show()
     print("✔  plot_5a_shap_beeswarm.png")
 
@@ -426,7 +431,7 @@ def plot_shap(rf, X_train, X_test, feature_names):
     plt.gca().set_title("SHAP Global Importance — Mean |phi_j|",
                          fontsize=12, color=TEAL, pad=10)
     plt.tight_layout()
-    plt.savefig("plot_5b_shap_bar.png", dpi=150, bbox_inches="tight")
+    plt.savefig(OUTPUT_DIR / "plot_5b_shap_bar.png", dpi=150, bbox_inches="tight")
     plt.show()
     print("✔  plot_5b_shap_bar.png")
 
@@ -442,7 +447,7 @@ def plot_shap(rf, X_train, X_test, feature_names):
     plt.gca().set_title(f"SHAP Waterfall — Sample #{sample_idx}",
                          fontsize=12, color=CORAL, pad=10)
     plt.tight_layout()
-    plt.savefig("plot_5c_shap_waterfall.png", dpi=150, bbox_inches="tight")
+    plt.savefig(OUTPUT_DIR / "plot_5c_shap_waterfall.png", dpi=150, bbox_inches="tight")
     plt.show()
     print("✔  plot_5c_shap_waterfall.png")
 
@@ -453,7 +458,7 @@ def plot_shap(rf, X_train, X_test, feature_names):
     plt.gca().set_title(f"SHAP Dependence — {top_feat}",
                          fontsize=12, color=GOLD, pad=10)
     plt.tight_layout()
-    plt.savefig("plot_5d_shap_dependence.png", dpi=150, bbox_inches="tight")
+    plt.savefig(OUTPUT_DIR / "plot_5d_shap_dependence.png", dpi=150, bbox_inches="tight")
     plt.show()
     print("✔  plot_5d_shap_dependence.png\n")
 
@@ -497,7 +502,7 @@ def plot_single_tree(rf, feature_names, tree_index=0, max_depth=3):
         fontsize=12, color=PURPLE, pad=12
     )
     fig.tight_layout()
-    fig.savefig("plot_6a_single_tree.png", dpi=150, bbox_inches="tight",
+    fig.savefig(OUTPUT_DIR / "plot_6a_single_tree.png", dpi=150, bbox_inches="tight",
                 facecolor=BG)
     plt.show()
     print("✔  plot_6a_single_tree.png")
@@ -571,7 +576,7 @@ def plot_decision_path(rf, X_test, feature_names, tree_index=0, sample_idx=0):
         fontsize=11, color=GOLD, pad=10
     )
     fig.tight_layout()
-    fig.savefig("plot_6b_decision_path.png", dpi=150, bbox_inches="tight",
+    fig.savefig(OUTPUT_DIR / "plot_6b_decision_path.png", dpi=150, bbox_inches="tight",
                 facecolor=BG)
     plt.show()
     print("✔  plot_6b_decision_path.png")
@@ -617,7 +622,7 @@ def plot_split_frequency(rf, feature_names, top_n=8):
                  fontsize=12, color=GOLD, pad=10)
     ax.grid(axis="x")
     fig.tight_layout()
-    fig.savefig("plot_6c_split_frequency.png", dpi=150, bbox_inches="tight",
+    fig.savefig(OUTPUT_DIR / "plot_6c_split_frequency.png", dpi=150, bbox_inches="tight",
                 facecolor=BG)
     plt.show()
     print("✔  plot_6c_split_frequency.png\n")
@@ -663,7 +668,7 @@ def plot_proximity_and_mds(rf, X, y, n_samples=150):
     ax.set_xlabel("Sample index")
     ax.set_ylabel("Sample index")
     fig.tight_layout()
-    fig.savefig("plot_7a_proximity_matrix.png", dpi=150, bbox_inches="tight",
+    fig.savefig(OUTPUT_DIR / "plot_7a_proximity_matrix.png", dpi=150, bbox_inches="tight",
                 facecolor=BG)
     plt.show()
     print("✔  plot_7a_proximity_matrix.png")
@@ -683,64 +688,10 @@ def plot_proximity_and_mds(rf, X, y, n_samples=150):
     ax.set_ylabel("MDS Dimension 2")
     ax.grid(alpha=0.3)
     fig.tight_layout()
-    fig.savefig("plot_7b_proximity_mds.png", dpi=150, bbox_inches="tight",
+    fig.savefig(OUTPUT_DIR / "plot_7b_proximity_mds.png", dpi=150, bbox_inches="tight",
                 facecolor=BG)
     plt.show()
     print("✔  plot_7b_proximity_mds.png\n")
-
-
-# ═══════════════════════════════════════════════════════════════════════════════
-# MAIN
-# ═══════════════════════════════════════════════════════════════════════════════
-
-def main():
-    print("=" * 62)
-    print("  Random Forest Regressor — Interpretation Pipeline")
-    print("=" * 62, "\n")
-
-    rf, X_train, X_test, y_train, y_test, X, y, feature_names = \
-        load_data_and_train()
-
-    print("── 1. MDI Feature Importance ──────────────────────────────────")
-    plot_mdi_importance(rf, feature_names)
-
-    print("── 2. Permutation Importance (MDA) ────────────────────────────")
-    plot_permutation_importance(rf, X_test, y_test, feature_names)
-
-    print("── 3. OOB R² Curve ─────────────────────────────────────────────")
-    plot_oob_curve(X_train, y_train)
-
-    print("── 4. PDP + ICE ────────────────────────────────────────────────")
-    plot_pdp_ice(rf, X_train, feature_names)
-
-    print("── 5. SHAP (TreeSHAP) ──────────────────────────────────────────")
-    sv = plot_shap(rf, X_train, X_test, feature_names)
-
-    print("── 6. Tree Split Visualisation ─────────────────────────────────")
-    plot_single_tree(rf, feature_names, tree_index=0, max_depth=3)
-    plot_decision_path(rf, X_test, feature_names, tree_index=0, sample_idx=0)
-    plot_split_frequency(rf, feature_names)
-
-    print("── 7. Proximity Matrix & MDS ───────────────────────────────────")
-    plot_proximity_and_mds(rf, X, y, n_samples=150)
-
-    print("── 8. Logical Split Explanations ───────────────────────────────")
-    direction_df = plot_feature_directions(
-        sv, X_test, feature_names, target_name="y", predictor_label="feature"
-    )
-    rules = extract_all_rules(rf, feature_names, max_depth=3, max_trees=20)
-    plot_rule_table(rules, feature_names, direction_df, target_name="y", top_n=8)
-    slope_df, pdp_curves = plot_pdp_slopes(rf, X_train, feature_names, target_name="y")
-    plot_pdp_annotated(pdp_curves, slope_df, feature_names, target_name="y")
-    print_narrative_summary(direction_df, slope_df, feature_names, target_name="y")
-
-    print("=" * 62)
-    print("  Done. All plots saved to current directory.")
-    print("=" * 62)
-
-
-if __name__ == "__main__":
-    main()
 
 # ═══════════════════════════════════════════════════════════════════════════════
 # 8.  LOGICAL SPLIT EXPLANATIONS
@@ -829,7 +780,7 @@ def plot_feature_directions(sv, X_test, feature_names,
 
     ax.grid(axis="x")
     fig.tight_layout()
-    fig.savefig("plot_8a_feature_directions.png", dpi=150, bbox_inches="tight",
+    fig.savefig(OUTPUT_DIR /"plot_8a_feature_directions.png", dpi=150, bbox_inches="tight",
                 facecolor=BG)
     plt.show()
     print("✔  plot_8a_feature_directions.png")
@@ -1001,7 +952,7 @@ def plot_rule_table(rules, feature_names, direction_df,
         fontsize=10, color=FG, pad=14, loc="left"
     )
     fig.tight_layout()
-    fig.savefig("plot_8b_rule_table.png", dpi=150, bbox_inches="tight",
+    fig.savefig(OUTPUT_DIR / "plot_8b_rule_table.png", dpi=150, bbox_inches="tight",
                 facecolor=BG)
     plt.show()
     print("✔  plot_8b_rule_table.png")
@@ -1101,7 +1052,7 @@ def plot_pdp_slopes(rf, X_train, feature_names,
         fontsize=13, color=FG, y=1.01, fontweight="bold"
     )
     fig.tight_layout()
-    fig.savefig("plot_8c_pdp_slopes.png", dpi=150, bbox_inches="tight",
+    fig.savefig(OUTPUT_DIR / "plot_8c_pdp_slopes.png", dpi=150, bbox_inches="tight",
                 facecolor=BG)
     plt.show()
     print("✔  plot_8c_pdp_slopes.png")
@@ -1167,7 +1118,7 @@ def plot_pdp_annotated(pdp_curves, slope_df, feature_names,
         fontsize=11, color=FG, y=1.01
     )
     fig.tight_layout()
-    fig.savefig("plot_8d_pdp_annotated.png", dpi=150, bbox_inches="tight",
+    fig.savefig(OUTPUT_DIR / "plot_8d_pdp_annotated.png", dpi=150, bbox_inches="tight",
                 facecolor=BG)
     plt.show()
     print("✔  plot_8d_pdp_annotated.png\n")
@@ -1213,6 +1164,58 @@ def print_narrative_summary(direction_df, slope_df, feature_names,
 
     print(f"{'─'*74}")
     print("  ★ = significant at p < 0.05  |  NL high = non-monotonic effect\n")
+
+
+
+# ═══════════════════════════════════════════════════════════════════════════════
+# MAIN
+# ═══════════════════════════════════════════════════════════════════════════════
+
+def main():
+    print("=" * 62)
+    print("  Random Forest Regressor — Interpretation Pipeline")
+    print("=" * 62, "\n")
+
+    rf, X_train, X_test, y_train, y_test, X, y, feature_names = \
+        load_data_and_train()
+
+    print("── 1. MDI Feature Importance ──────────────────────────────────")
+    plot_mdi_importance(rf, feature_names)
+
+    print("── 2. Permutation Importance (MDA) ────────────────────────────")
+    plot_permutation_importance(rf, X_test, y_test, feature_names)
+
+    print("── 3. OOB R² Curve ─────────────────────────────────────────────")
+    plot_oob_curve(X_train, y_train)
+
+    print("── 4. PDP + ICE ────────────────────────────────────────────────")
+    plot_pdp_ice(rf, X_train, feature_names)
+
+    print("── 5. SHAP (TreeSHAP) ──────────────────────────────────────────")
+    sv = plot_shap(rf, X_train, X_test, feature_names)
+
+    print("── 6. Tree Split Visualisation ─────────────────────────────────")
+    plot_single_tree(rf, feature_names, tree_index=0, max_depth=3)
+    plot_decision_path(rf, X_test, feature_names, tree_index=0, sample_idx=0)
+    plot_split_frequency(rf, feature_names)
+
+    print("── 7. Proximity Matrix & MDS ───────────────────────────────────")
+    plot_proximity_and_mds(rf, X, y, n_samples=150)
+
+    print("── 8. Logical Split Explanations ───────────────────────────────")
+    direction_df = plot_feature_directions(
+        sv, X_test, feature_names, target_name="y", predictor_label="feature"
+    )
+    rules = extract_all_rules(rf, feature_names, max_depth=3, max_trees=20)
+    plot_rule_table(rules, feature_names, direction_df, target_name="y", top_n=8)
+    slope_df, pdp_curves = plot_pdp_slopes(rf, X_train, feature_names, target_name="y")
+    plot_pdp_annotated(pdp_curves, slope_df, feature_names, target_name="y")
+    print_narrative_summary(direction_df, slope_df, feature_names, target_name="y")
+
+    print("=" * 62)
+    print("  Done. All plots saved to current directory.")
+    print("=" * 62)
+
 
 if __name__ == "__main__":
     main()
