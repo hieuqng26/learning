@@ -135,8 +135,20 @@ class StabilitySelector(BaseEstimator):
 
     Parameters
     ----------
-    estimator : sklearn estimator with `alpha` parameter, optional
-        Must expose `.coef_` after fitting. Defaults to `Lasso(max_iter=10_000)`.
+    estimator : sklearn estimator, optional
+        Must expose `.coef_` after fitting.  Two modes are supported:
+
+        Path estimators (Lasso, ElasticNet — default: Lasso(max_iter=10_000)):
+            Must accept an `alpha` parameter.  The estimator is re-fit at
+            every point on the lambda grid for each subsample, producing a
+            full stability path curve per feature.
+
+        Auto-CV estimators (LassoCV, ElasticNetCV):
+            The estimator selects its own alpha via internal CV on each
+            subsample.  It is fit once per subsample (not once per lambda).
+            The stability paths plot will show flat lines — that is expected.
+            max_sel_probs still gives the fraction of subsamples in which
+            each feature was selected by the CV-chosen lambda.
     n_bootstraps : int, default=100
         Number of subsample runs B. The paper suggests B ≥ 50; 100 is safer.
     n_lambdas : int, default=50
@@ -195,14 +207,41 @@ class StabilitySelector(BaseEstimator):
         return np.geomspace(lambda_max, lambda_min, num=self.n_lambdas)
 
     @staticmethod
+    def _is_path_estimator(estimator) -> bool:
+        """
+        Return True if the estimator accepts a manual `alpha` parameter
+        (e.g. Lasso, ElasticNet).  Return False for auto-selecting CV
+        variants (e.g. LassoCV, ElasticNetCV) that pick alpha internally.
+        """
+        return "alpha" in estimator.get_params()
+
+    @staticmethod
     def _fit_single(
         estimator,
         X_sub: np.ndarray,
         y_sub: np.ndarray,
         lambda_grid: np.ndarray,
+        is_path_estimator: bool = True,
     ) -> np.ndarray:
         """
-        Fit the estimator over the full lambda grid for one subsample.
+        Fit the estimator for one subsample.
+
+        Two modes controlled by `is_path_estimator`:
+
+        Path mode (Lasso, ElasticNet):
+            Iterate over lambda_grid, set alpha=lam each time, record the
+            binary selection mask at every grid point.
+            Returns ndarray of shape (p, n_lambdas).
+
+        Auto-CV mode (LassoCV, ElasticNetCV):
+            Fit once — the estimator selects its own alpha via internal CV
+            on the subsample itself.  The single selection mask is broadcast
+            across all n_lambdas columns so the result shape is still
+            (p, n_lambdas) and the rest of the pipeline is unchanged.
+            The stability paths plot will show flat horizontal lines (all
+            columns identical per feature) — that is expected behaviour.
+            max_sel_probs is still meaningful: it equals the fraction of
+            subsamples in which that feature was selected by the CV-chosen λ.
 
         Returns
         -------
@@ -211,12 +250,22 @@ class StabilitySelector(BaseEstimator):
         p = X_sub.shape[1]
         selected = np.zeros((p, len(lambda_grid)), dtype=bool)
         est = clone(estimator)
-        for k, lam in enumerate(lambda_grid):
-            est.set_params(alpha=lam)
+
+        if is_path_estimator:
+            for k, lam in enumerate(lambda_grid):
+                est.set_params(alpha=lam)
+                with warnings.catch_warnings():
+                    warnings.simplefilter("ignore")
+                    est.fit(X_sub, y_sub)
+                selected[:, k] = np.abs(est.coef_) > 0
+        else:
+            # Auto-CV: fit once, broadcast the single mask to all λ columns
             with warnings.catch_warnings():
-                warnings.simplefilter("ignore")  # suppress ConvergenceWarning
+                warnings.simplefilter("ignore")
                 est.fit(X_sub, y_sub)
-            selected[:, k] = np.abs(est.coef_) > 0
+            mask = np.abs(est.coef_) > 0
+            selected[:, :] = mask[:, np.newaxis]
+
         return selected
 
     # ------------------------------------------------------------------
@@ -250,7 +299,15 @@ class StabilitySelector(BaseEstimator):
         rng = check_random_state(self.random_state)
 
         estimator = self.estimator or Lasso(max_iter=10_000)
+        is_path = self._is_path_estimator(estimator)
         lambda_grid = self._build_lambda_grid(X, y)
+
+        if not is_path and self.verbose:
+            print(
+                f"  Auto-CV estimator detected ({type(estimator).__name__}). "
+                "Fitting once per subsample; lambda grid is used only for "
+                "result shape compatibility."
+            )
 
         # Accumulate selection indicators: shape (p, n_lambdas)
         sel_counts = np.zeros((p, self.n_lambdas), dtype=float)
@@ -261,7 +318,8 @@ class StabilitySelector(BaseEstimator):
                 print(f"  Bootstrap {b + 1}/{self.n_bootstraps}")
             idx = rng.choice(n, size=subsample_size, replace=False)
             sel_counts += self._fit_single(
-                estimator, X[idx], y[idx], lambda_grid
+                estimator, X[idx], y[idx], lambda_grid,
+                is_path_estimator=is_path,
             )
 
         # Selection probabilities Π̂_j(λ)
@@ -512,6 +570,21 @@ def _demo():
 
     plt.close("all")
     print("\nPlots saved.")
+
+
+    print("\n--- LassoCV estimator (auto-CV mode) ---")
+    from sklearn.linear_model import LassoCV as _LassoCV
+    selector_cv = StabilitySelector(
+        estimator=_LassoCV(cv=5, max_iter=10_000),
+        n_bootstraps=100, n_lambdas=50, pi_thr=0.8,
+        lambda_min_ratio=0.05, random_state=0, verbose=True,
+    )
+    selector_cv.fit(X_s, y, feature_names=feature_names)
+    res_cv = selector_cv.result_
+    print(res_cv.summary())
+    found_cv = set(res_cv.stable_indices)
+    print(f"True positives  : {len(true_set & found_cv)}/{n_true}")
+    print(f"False positives : {len(found_cv - true_set)}")
 
 
 if __name__ == "__main__":
