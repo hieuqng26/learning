@@ -1,0 +1,78 @@
+{
+  "use_spreaded_term_structures": true,
+  "scenarios": [
+    {
+      "id": "STRESS_COMBINED",
+      "description": "Combined stress: USD rates up, EUR rates down",
+      "discount_curves": [
+        {
+          "ccy": "USD",
+          "shift_type": "Absolute",
+          "shifts": [
+            0.02,
+            0.02
+          ],
+          "shift_tenors": [
+            "1Y",
+            "5Y"
+          ]
+        },
+        {
+          "ccy": "EUR",
+          "shift_type": "Absolute",
+          "shifts": [
+            -0.01,
+            -0.01
+          ],
+          "shift_tenors": [
+            "1Y",
+            "5Y"
+          ]
+        }
+      ],
+      "fx_spots": [
+        {
+          "ccypair": "USDEUR",
+          "shift_type": "Relative",
+          "shift_size": -0.15
+        }
+      ],
+      "fx_volatilities": [],
+      "swaption_volatilities": [
+        {
+          "ccy": "EUR",
+          "shift_type": "Relative",
+          "shift_expiries": [
+            "1Y",
+            "2Y",
+            "5Y"
+          ],
+          "shift_terms": [
+            "1Y",
+            "5Y",
+            "10Y"
+          ],
+          "shifts": 0.2
+        },
+        {
+          "ccy": "USD",
+          "shift_type": "Relative",
+          "shift_expiries": [
+            "1Y",
+            "5Y"
+          ],
+          "shift_terms": [
+            "1Y",
+            "10Y"
+          ],
+          "shifts": [
+            0.15,
+            0.15,
+            0.15,
+            0.15
+          ]
+        }
+      ]
+    }
+  ]
+}

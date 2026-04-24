@@ -1,0 +1,198 @@
+<template>
+  <div>
+    <label
+      v-if="label"
+      :for="id"
+      class="block mb-2 font-medium"
+      :class="{ required: required }"
+    >
+      {{ label }}
+    </label>
+    <MultiSelect
+      :id="id"
+      v-model="internalValue"
+      :options="options"
+      :optionLabel="optionLabel"
+      :optionValue="optionValue"
+      :placeholder="placeholder"
+      :disabled="disabled"
+      :invalid="hasError"
+      :filter="filter"
+      :filterPlaceholder="filterPlaceholder"
+      :maxSelectedLabels="maxSelectedLabels"
+      :selectedItemsLabel="selectedItemsLabel"
+      :selectionLimit="selectionLimit"
+      :appendTo="'self'"
+      display="chip"
+      class="w-full"
+      @blur="handleBlur"
+    />
+    <small v-if="hasError" class="p-error block mt-1">{{ errorMessage }}</small>
+    <small
+      v-else-if="helpText"
+      class="text-color-secondary block mt-1 text-sm"
+      >{{ helpText }}</small
+    >
+  </div>
+</template>
+
+<script setup>
+import { computed, ref, watch, nextTick } from 'vue'
+
+const props = defineProps({
+  modelValue: {
+    type: Array,
+    default: () => []
+  },
+  label: {
+    type: String,
+    default: ''
+  },
+  placeholder: {
+    type: String,
+    default: 'Select options'
+  },
+  required: {
+    type: Boolean,
+    default: false
+  },
+  disabled: {
+    type: Boolean,
+    default: false
+  },
+  options: {
+    type: Array,
+    required: true
+  },
+  optionLabel: {
+    type: String,
+    default: 'label'
+  },
+  optionValue: {
+    type: String,
+    default: 'value'
+  },
+  filter: {
+    type: Boolean,
+    default: true
+  },
+  filterPlaceholder: {
+    type: String,
+    default: 'Search...'
+  },
+  maxSelectedLabels: {
+    type: Number,
+    default: 3
+  },
+  selectedItemsLabel: {
+    type: String,
+    default: '{0} items selected'
+  },
+  selectionLimit: {
+    type: Number,
+    default: null
+  },
+  helpText: {
+    type: String,
+    default: ''
+  },
+  validators: {
+    type: Array,
+    default: () => []
+  },
+  formData: {
+    type: Object,
+    default: () => ({})
+  }
+})
+
+const emit = defineEmits(['update:modelValue', 'blur'])
+
+const id = ref(`form-multiselect-${Math.random().toString(36).substring(2, 9)}`)
+const errorMessage = ref('')
+const touched = ref(false)
+const internalValue = ref(props.modelValue || [])
+const isSyncing = ref(false)
+
+// Sync internal value with prop
+watch(
+  () => props.modelValue,
+  (newValue) => {
+    const normalizedValue = newValue || []
+    if (
+      JSON.stringify(internalValue.value) !== JSON.stringify(normalizedValue)
+    ) {
+      isSyncing.value = true
+      internalValue.value = normalizedValue
+      nextTick(() => {
+        isSyncing.value = false
+      })
+    }
+  },
+  { immediate: true }
+)
+
+// Emit changes from internal value (only when user selects, not when syncing from prop)
+watch(internalValue, (newValue) => {
+  if (!isSyncing.value) {
+    emit('update:modelValue', newValue)
+    validate()
+  }
+})
+
+const hasError = computed(() => {
+  return touched.value && errorMessage.value !== ''
+})
+
+const validate = () => {
+  errorMessage.value = ''
+
+  if (
+    props.required &&
+    (!internalValue.value || internalValue.value.length === 0)
+  ) {
+    errorMessage.value = 'This field is required'
+    return false
+  }
+
+  if (
+    props.selectionLimit &&
+    internalValue.value.length > props.selectionLimit
+  ) {
+    errorMessage.value = `Maximum ${props.selectionLimit} selections allowed`
+    return false
+  }
+
+  for (const validator of props.validators) {
+    const result = validator(internalValue.value, props.formData)
+    if (result !== true) {
+      errorMessage.value = result
+      return false
+    }
+  }
+
+  return true
+}
+
+const handleBlur = () => {
+  touched.value = true
+  validate()
+  emit('blur')
+}
+
+defineExpose({
+  validate
+})
+</script>
+
+<style scoped>
+.required::after {
+  content: ' *';
+  color: var(--red-500);
+}
+
+.p-error {
+  color: var(--red-500);
+  font-size: 0.875rem;
+}
+</style>

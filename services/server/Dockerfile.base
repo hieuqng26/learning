@@ -1,0 +1,206 @@
+# Base image with QuantLib and OpenSourceRiskEngine pre-built
+# This image should be built separately and pushed to a registry
+FROM registry.access.redhat.com/ubi9/ubi-minimal AS base
+
+# Set the work directory
+WORKDIR /usr/src/app
+
+# Install all build dependencies in a single layer
+RUN echo "sslverify=false" >> /etc/dnf/dnf.conf && \
+    microdnf update -y && \
+    microdnf install -y \
+      gcc \
+      gcc-c++ \
+      findutils \
+      openssl-devel \
+      bzip2-devel \
+      libffi-devel \
+      zlib-devel \
+      wget \
+      make \
+      sqlite-devel \
+      xz-devel \
+      pam \
+      tar \
+      bzip2 \
+      which \
+      file \
+      autoconf \
+      automake \
+      libtool \
+      pkgconfig \
+      m4 \
+      pcre2-devel \
+      cmake && \
+    microdnf clean all
+
+# Install Python 3.11.9 from source (needed for specific version compatibility)
+RUN cd /tmp && \
+    wget --no-check-certificate --max-redirect=0 https://www.python.org/ftp/python/3.11.9/Python-3.11.9.tgz && \
+    tar xzf Python-3.11.9.tgz && \
+    cd Python-3.11.9 && \
+    ./configure --enable-optimizations --prefix=/usr/local && \
+    make altinstall && \
+    ln -sf /usr/local/bin/python3.11 /usr/local/bin/python3 && \
+    ln -sf /usr/local/bin/pip3.11 /usr/local/bin/pip3 && \
+    cd /tmp && \
+    rm -rf Python-3.11.9*
+
+# Upgrade pip and install build tools
+RUN /usr/local/bin/python3 -m pip install --trusted-host pypi.org --trusted-host pypi.python.org --trusted-host files.pythonhosted.org --upgrade pip setuptools build
+
+# # Install and build Boost
+# ENV BOOST_VERSION=1.84.0
+# ENV BOOST_VERSION_=1_84_0
+# ENV BOOST_ROOT=/usr/local
+
+# RUN cd /tmp && \
+#     wget --no-check-certificate -O boost_${BOOST_VERSION_}.tar.bz2 \
+#         https://sourceforge.net/projects/boost/files/boost/${BOOST_VERSION}/boost_${BOOST_VERSION_}.tar.bz2/download && \
+#     tar --bzip2 -xf boost_${BOOST_VERSION_}.tar.bz2 && \
+#     cd boost_${BOOST_VERSION_} && \
+#     ./bootstrap.sh \
+#         --prefix=${BOOST_ROOT} \
+#         --with-python=/usr/local/bin/python3 \
+#         --with-python-version=3.11 && \
+#     ./b2 \
+#         --prefix=${BOOST_ROOT} \
+#         variant=release \
+#         link=shared \
+#         threading=multi \
+#         runtime-link=shared \
+#         cxxflags="-fPIC" \
+#         -j$(nproc) \
+#         install && \
+#     rm -rf /tmp/boost_${BOOST_VERSION_}*
+
+# # Install SWIG from source
+# ENV SWIG_VERSION=4.2.0
+
+# RUN cd /tmp && \
+#     wget --no-check-certificate http://prdownloads.sourceforge.net/swig/swig-${SWIG_VERSION}.tar.gz && \
+#     tar -xzf swig-${SWIG_VERSION}.tar.gz && \
+#     cd swig-${SWIG_VERSION} && \
+#     ./configure --prefix=/usr/local && \
+#     make -j$(nproc) && \
+#     make install && \
+#     rm -rf /tmp/swig-${SWIG_VERSION}*
+
+# # Install additional Python tools
+# RUN /usr/local/bin/python3 -m pip install --trusted-host pypi.org --trusted-host pypi.python.org --trusted-host files.pythonhosted.org --upgrade tox pytest
+
+# # Set environment variables for runtime
+# ENV PATH="/usr/local/bin:${PATH}"
+# ENV LD_LIBRARY_PATH="/usr/local/lib"
+# ENV PKG_CONFIG_PATH="/usr/local/lib/pkgconfig"
+
+# # Build QuantLib from source
+# COPY ql_build/QuantLib/ /tmp/ql_build/QuantLib/
+# RUN cd /tmp/ql_build/QuantLib && \
+#     find . -type f \( -name "*.ac" -o -name "*.in" -o -name "*.sh" -o -name "*.am" \) -exec sed -i 's/\r$//' {} \; && \
+#     autoreconf --force --install --verbose && \
+#     ./configure --prefix=/usr/local \
+#         --with-boost-include=${BOOST_ROOT}/include \
+#         --with-boost-lib=${BOOST_ROOT}/lib && \
+#     make -j$(nproc) && \
+#     make install && \
+#     ldconfig
+
+# # Build QuantLib-SWIG (Python bindings) - keep for QLD-SWIG
+# COPY ql_build/QuantLib-SWIG/ /tmp/ql_build/QuantLib-SWIG/
+# RUN cd /tmp/ql_build/QuantLib-SWIG && \
+#     find . -type f \( -name "*.ac" -o -name "*.in" -o -name "*.sh" -o -name "*.am" \) -exec sed -i 's/\r$//' {} \; && \
+#     autoreconf --force --install && \
+#     ./configure --prefix=/usr/local && \
+#     cd Python && \
+#     make && \
+#     make check && \
+#     /usr/local/bin/python3 setup.py install
+
+# # Build OpenSourceRiskEngine (ORE)
+# COPY ql_build/OpensourceRiskEngine/ /tmp/ql_build/OpensourceRiskEngine/
+# COPY ql_build/QuantLib/ /tmp/ql_build/OpensourceRiskEngine/QuantLib/
+
+# RUN cd /tmp/ql_build/OpensourceRiskEngine && \
+#     mkdir -p build && \
+#     cd build && \
+#     cmake .. \
+#         -D QL_ENABLE_SESSIONS=ON \
+#         -D QL_BUILD_EXAMPLES=OFF \
+#         -D ORE_USE_ZLIB=ON \
+#         -D BOOST_INCLUDEDIR=${BOOST_ROOT}/include \
+#         -D BOOST_LIBRARYDIR=${BOOST_ROOT}/lib && \
+#     make -j$(nproc) && \
+#     make install
+
+# # Build QLD libraries
+# COPY ql_build/QLD/ /tmp/ql_build/QLD/
+# RUN cd /tmp/ql_build/QLD && \
+#     # Create specific symlinks for mixed-case header issues
+#     ln -sf fdblackscholesaccumulatorengine.hpp pricing/FX/FdBlackScholesAccumulatorEngine.hpp && \
+#     # Compile all QLD source files into static libraries
+#     mkdir -p build && \
+#     cd build && \
+#     # Compile foundation library
+#     g++ -std=c++17 -fPIC -I.. -I../foundation -I../foundation/datetime/calendars -I../../QuantLib -I../../OpensourceRiskEngine/QuantExt -I/usr/local/include \
+#         -c ../foundation/datetime/calendars/*.cpp ../foundation/*.cpp && \
+#     ar rcs libqld-foundation.a *.o && \
+#     rm *.o && \
+#     # Compile market library
+#     g++ -std=c++17 -fPIC -I.. -I../market -I../market/FX -I../../QuantLib -I../../OpensourceRiskEngine/QuantExt -I/usr/local/include \
+#         -c ../market/FX/*.cpp ../market/*.cpp && \
+#     ar rcs libqld-market.a *.o && \
+#     rm *.o && \
+#     # Compile math library
+#     g++ -std=c++17 -fPIC -I.. -I../math -I../math/distribution -I../math/extrapolation -I../../QuantLib -I../../OpensourceRiskEngine/QuantExt -I/usr/local/include \
+#         -c ../math/distribution/*.cpp ../math/extrapolation/*.cpp ../math/*.cpp && \
+#     ar rcs libqld-math.a *.o && \
+#     rm *.o && \
+#     # Compile model library
+#     g++ -std=c++17 -fPIC -I.. -I../model -I../model/IR -I../../QuantLib -I../../OpensourceRiskEngine/QuantExt -I/usr/local/include \
+#         -c ../model/IR/*.cpp ../model/*.cpp && \
+#     ar rcs libqld-model.a *.o && \
+#     rm *.o && \
+#     # Compile pricing library
+#     g++ -std=c++17 -fPIC -I.. -I../pricing -I../pricing/crossasset -I../pricing/EQ -I../pricing/FX -I../pricing/IR -I../pricing/IR/swaption -I../../QuantLib -I../../OpensourceRiskEngine/QuantExt -I/usr/local/include \
+#         -c ../pricing/crossasset/*.cpp ../pricing/EQ/*.cpp ../pricing/FX/*.cpp ../pricing/IR/*.cpp ../pricing/*.cpp && \
+#     find ../pricing/IR/swaption -name "*.cpp" -exec g++ -std=c++17 -fPIC -I.. -I../pricing -I../pricing/crossasset -I../pricing/EQ -I../pricing/FX -I../pricing/IR -I../pricing/IR/swaption -I../../QuantLib -I../../OpensourceRiskEngine/QuantExt -I/usr/local/include -c {} \; && \
+#     ar rcs libqld-pricing.a *.o && \
+#     rm *.o && \
+#     # Compile trade library
+#     g++ -std=c++17 -fPIC -I.. -I../trade -I../trade/crossasset -I../trade/EQ -I../trade/FX -I../trade/IR -I../trade/IR/couponpricer -I../../QuantLib -I../../OpensourceRiskEngine/QuantExt -I/usr/local/include \
+#         -c ../trade/crossasset/*.cpp ../trade/EQ/*.cpp ../trade/FX/*.cpp ../trade/IR/*.cpp ../trade/IR/couponpricer/*.cpp ../trade/*.cpp && \
+#     ar rcs libqld-trade.a *.o && \
+#     rm *.o && \
+#     # Compile QLD-LIB (main library)
+#     g++ -std=c++17 -fPIC -I.. -I../QLD-LIB -I../../QuantLib -I../../OpensourceRiskEngine/QuantExt -I/usr/local/include \
+#         -c ../QLD-LIB/*.cpp && \
+#     ar rcs libqld-main.a *.o && \
+#     rm *.o && \
+#     # Move libraries to a standard location
+#     cp *.a /usr/local/lib/
+
+# # Build QLD-SWIG Python bindings
+# RUN cd /tmp/ql_build/QLD/QLD-SWIG && \
+#     /usr/local/bin/python3 setup.py wrap && \
+#     /usr/local/bin/python3 setup.py build_ext --inplace && \
+#     mkdir -p /usr/local/lib/python3.11/site-packages/qld/ && \
+#     cp QLD/_QLD*.so /usr/local/lib/python3.11/site-packages/qld/ && \
+#     cp QLD/QLD.py /usr/local/lib/python3.11/site-packages/qld/
+
+# # Clean up build files to reduce image size
+# RUN rm -rf /tmp/ql_build/QuantLib && \
+#     rm -rf /tmp/ql_build/QuantLib-SWIG && \
+#     rm -rf /tmp/ql_build/OpensourceRiskEngine && \
+#     rm -rf /tmp/ql_build/QLD
+
+# Install ODBC drivers (needed for runtime)
+RUN mkdir -p /etc/pki/rpm-gpg && \
+    curl https://packages.microsoft.com/keys/microsoft.asc | gpg --dearmor -o /etc/pki/rpm-gpg/microsoft.asc.gpg && \
+    curl https://packages.microsoft.com/config/rhel/9/prod.repo -o /etc/yum.repos.d/mssql-release.repo && \
+    microdnf update -y && \
+    ACCEPT_EULA=Y microdnf install -y msodbcsql18 mssql-tools18 && \
+    microdnf clean all
+
+# Add SQLCMD to the PATH environment variable
+ENV PATH="$PATH:/opt/mssql-tools18/bin"

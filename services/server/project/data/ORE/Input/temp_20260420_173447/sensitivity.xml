@@ -1,0 +1,43 @@
+<?xml version='1.0' encoding='UTF-8'?>
+<SensitivityAnalysis>
+  <DiscountCurves>
+    <DiscountCurve ccy="EUR">
+      <ShiftType>Absolute</ShiftType>
+      <ShiftSize>0.0001</ShiftSize>
+      <ShiftScheme>Forward</ShiftScheme>
+      <ShiftTenors>6M, 1Y, 2Y, 5Y, 10Y</ShiftTenors>
+      <ParConversion>
+        <Instruments>OIS, OIS, OIS, OIS, OIS</Instruments>
+        <SingleCurve>true</SingleCurve>
+        <Conventions>
+          <Convention id="DEP">EUR-EONIA-CONVENTIONS</Convention>
+          <Convention id="OIS">EUR-OIS-CONVENTIONS</Convention>
+        </Conventions>
+      </ParConversion>
+    </DiscountCurve>
+  </DiscountCurves>
+  <YieldCurves/>
+  <IndexCurves>
+    <IndexCurve index="EUR-EURIBOR-3M">
+      <ShiftType>Absolute</ShiftType>
+      <ShiftSize>0.0001</ShiftSize>
+      <ShiftScheme>Forward</ShiftScheme>
+      <ShiftTenors>6M, 1Y, 2Y, 5Y, 10Y</ShiftTenors>
+    </IndexCurve>
+  </IndexCurves>
+  <FxSpots/>
+  <SwaptionVolatilities>
+    <SwaptionVolatility ccy="EUR">
+      <ShiftType>Relative</ShiftType>
+      <ShiftSize>0.01</ShiftSize>
+      <ShiftScheme>Forward</ShiftScheme>
+      <ShiftExpiries>2Y</ShiftExpiries>
+      <ShiftTerms>10Y</ShiftTerms>
+      <ShiftStrikes>0.0000000000000000</ShiftStrikes>
+    </SwaptionVolatility>
+  </SwaptionVolatilities>
+  <FxVolatilities/>
+  <CapFloorVolatilities/>
+  <ComputeGamma>false</ComputeGamma>
+  <UseSpreadedTermStructures>false</UseSpreadedTermStructures>
+</SensitivityAnalysis>

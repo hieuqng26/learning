@@ -1,0 +1,6 @@
+{
+  "python.unitTest.pyTestArgs": [
+    "--exitfirst",
+    "--verbose"
+  ],
+}

@@ -1,0 +1,117 @@
+<?xml version="1.0"?>
+<ORE>
+  <Setup>
+    <Parameter name="asofDate">2016-02-05</Parameter>
+    <Parameter name="inputPath">Input</Parameter>
+    <Parameter name="outputPath">Output/test</Parameter>
+    <Parameter name="logFile">log.txt</Parameter>
+    <Parameter name="logMask">31</Parameter>
+    <Parameter name="marketDataFile">Static/market_20160205_with_cpty.csv</Parameter>
+    <Parameter name="fixingDataFile">Static/fixings_20160205.txt</Parameter>
+    <Parameter name="implyTodaysFixings">Y</Parameter>
+    <Parameter name="curveConfigFile">Static/curveconfig.xml</Parameter>
+    <Parameter name="conventionsFile">Static/conventions.xml</Parameter>
+    <Parameter name="marketConfigFile">Static/todaysmarket.xml</Parameter>
+    <Parameter name="pricingEnginesFile">Static/pricingengine.xml</Parameter>
+    <Parameter name="portfolioFile">portfolio.xml</Parameter>
+    <Parameter name="observationModel">None</Parameter>
+    <Parameter name="continueOnError">false</Parameter>
+    <Parameter name="nThreads">8</Parameter>
+    <Parameter name="calendarAdjustment">Static/calendaradjustment.xml</Parameter>
+    <Parameter name="currencyConfiguration">Static/currencies.xml</Parameter>
+  </Setup>
+  <Markets>
+    <Parameter name="lgmcalibration">collateral_inccy</Parameter>
+    <Parameter name="fxcalibration">xois_eur</Parameter>
+    <Parameter name="pricing">xois_eur</Parameter>
+    <Parameter name="simulation">xois_eur</Parameter>
+    <Parameter name="sensitivity">default</Parameter>
+  </Markets>
+  <Analytics>
+    <Analytic type="npv">
+      <Parameter name="active">Y</Parameter>
+      <Parameter name="baseCurrency">EUR</Parameter>
+      <Parameter name="outputFileName">npv.csv</Parameter>
+      <Parameter name="additionalResults">Y</Parameter>
+      <Parameter name="additionalResultsReportPrecision">12</Parameter>
+    </Analytic>
+    <Analytic type="cashflow">
+      <Parameter name="active">Y</Parameter>
+      <Parameter name="outputFileName">flows.csv</Parameter>
+    </Analytic>
+    <Analytic type="curves">
+      <Parameter name="active">Y</Parameter>
+      <Parameter name="configuration">default</Parameter>
+      <Parameter name="grid">240,1M</Parameter>
+      <Parameter name="outputFileName">curves.csv</Parameter>
+      <Parameter name="outputTodaysMarketCalibration">Y</Parameter>
+    </Analytic>
+    <Analytic type="simulation">
+      <Parameter name="active">Y</Parameter>
+      <Parameter name="simulationConfigFile">Static/simulation.xml</Parameter>
+      <Parameter name="pricingEnginesFile">Static/pricingengine.xml</Parameter>
+      <Parameter name="baseCurrency">EUR</Parameter>
+      <Parameter name="observationModel">Disable</Parameter>
+      <Parameter name="cubeFile">cube.csv.gz</Parameter>
+      <Parameter name="aggregationScenarioDataFileName">scenariodata.csv.gz</Parameter>
+    </Analytic>
+    <Analytic type="xva">
+      <Parameter name="active">Y</Parameter>
+      <Parameter name="useXvaRunner">N</Parameter>
+      <Parameter name="csaFile">netting.xml</Parameter>
+      <Parameter name="cubeFile">cube.csv.gz</Parameter>
+      <Parameter name="scenarioFile">scenariodata.csv.gz</Parameter>
+      <Parameter name="baseCurrency">EUR</Parameter>
+      <Parameter name="exposureProfiles">Y</Parameter>
+      <Parameter name="exposureProfilesByTrade">Y</Parameter>
+      <Parameter name="cva">Y</Parameter>
+      <Parameter name="rawCubeOutputFile">rawcube.csv</Parameter>
+      <Parameter name="netCubeOutputFile">netcube.csv</Parameter>
+    </Analytic>
+    <Analytic type="sensitivity">
+      <Parameter name="active">N</Parameter>
+      <Parameter name="marketConfigFile">Static/simulation.xml</Parameter>
+      <Parameter name="sensitivityConfigFile">Static/sensitivity.xml</Parameter>
+      <Parameter name="pricingEnginesFile">Static/pricingengine.xml</Parameter>
+      <Parameter name="scenarioOutputFile">scenario.csv</Parameter>
+      <Parameter name="sensitivityOutputFile">sensitivity.csv</Parameter>
+      <Parameter name="outputSensitivityThreshold">0.000001</Parameter>
+      <Parameter name="recalibrateModels">N</Parameter>
+      <Parameter name="parSensitivity">Y</Parameter>
+      <Parameter name="optimiseRiskFactors">Y</Parameter>
+      <Parameter name="parSensitivityOutputFile">parsensitivity.csv</Parameter>
+      <Parameter name="outputJacobi">Y</Parameter>
+      <Parameter name="jacobiOutputFile">sensitivity_jacobi.csv</Parameter>
+      <Parameter name="jacobiInverseOutputFile">sensitivity_jacobi_inverse.csv</Parameter>
+    </Analytic>
+    <Analytic type="xvaSensitivity">
+      <Parameter name="active">N</Parameter>
+      <Parameter name="marketConfigFile">xvasensimarket.xml</Parameter>
+      <Parameter name="sensitivityConfigFile">sensitivity.xml</Parameter>
+      <Parameter name="outputSensitivityThreshold">0.000001</Parameter>
+      <Parameter name="parSensitivity">Y</Parameter>
+      <Parameter name="outputJacobi">Y</Parameter>
+      <Parameter name="jacobiOutputFile">xva_sensitivity_jacobi.csv</Parameter>
+      <Parameter name="jacobiInverseOutputFile">xva_sensitivity_jacobi_inverse.csv</Parameter>
+    </Analytic>
+    <Analytic type="stress">
+      <Parameter name="active">N</Parameter>
+      <Parameter name="precision">6</Parameter>
+      <Parameter name="marketConfigFile">xvasensimarket.xml</Parameter>
+      <Parameter name="stressConfigFile">scenarios.xml</Parameter>
+      <Parameter name="pricingEnginesFile">Static/pricingengine.xml</Parameter>
+      <Parameter name="baseCurrency">EUR</Parameter>
+      <Parameter name="scenarioOutputFile">stresstest.csv</Parameter>
+      <Parameter name="outputThreshold">0.000001</Parameter>
+      <Parameter name="generateCashflows">Y</Parameter>
+      <Parameter name="scenarioCashflowOutputFile">stresstest_flows.csv</Parameter>
+    </Analytic>
+    <Analytic type="xvaStress">
+      <Parameter name="active">N</Parameter>
+      <Parameter name="marketConfigFile">xvasensimarket.xml</Parameter>
+      <Parameter name="stressConfigFile">scenarios.xml</Parameter>
+      <Parameter name="baseCurrency">EUR</Parameter>
+      <Parameter name="writeCubes">N</Parameter>
+    </Analytic>
+  </Analytics>
+</ORE>
