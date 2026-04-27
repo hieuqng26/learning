@@ -1309,6 +1309,112 @@ class EVTBacktester:
             'reject_null': p_value < 0.05  # Reject if model is inadequate
         }
 
+    def christoffersen_test(self, segment_name, confidence_level=0.99,
+                            test_period_years=None):
+        """
+        Christoffersen (1998) conditional coverage test.
+        Tests both unconditional coverage and independence of violations.
+
+        Combines two LR tests:
+        - LR_uc: Kupiec unconditional coverage (chi2, df=1)
+        - LR_ind: independence of consecutive violations (chi2, df=1)
+        - LR_cc = LR_uc + LR_ind (chi2, df=2)
+
+        Parameters:
+        -----------
+        segment_name : str
+            Segment name
+        confidence_level : float
+            VaR confidence level
+        test_period_years : list, optional
+            Specific years to test (if None, uses all data)
+
+        Returns:
+        --------
+        dict : LR statistics, p-values, and pass/fail for each component
+        """
+        from scipy.stats import chi2
+
+        segment_data = self.data[self.data[self.evt_model.segment_col] == segment_name]
+
+        if test_period_years:
+            segment_data = segment_data[segment_data['Year'].isin(test_period_years)]
+
+        actual_values = segment_data[self.value_col].dropna().values
+        n = len(actual_values)
+        p = 1 - confidence_level
+
+        var = self.evt_model.calculate_var(segment_name, confidence_level)
+        hits = (actual_values > var).astype(int)  # 1 = violation, 0 = no violation
+
+        # --- Unconditional coverage (Kupiec) ---
+        v = hits.sum()
+        p_hat = v / n
+
+        if v == 0:
+            lr_uc = -2 * np.log((1 - p) ** n)
+        elif v == n:
+            lr_uc = -2 * np.log(p ** n)
+        else:
+            lr_uc = -2 * (
+                v * np.log(p / p_hat)
+                + (n - v) * np.log((1 - p) / (1 - p_hat))
+            )
+
+        pval_uc = 1 - chi2.cdf(lr_uc, df=1)
+
+        # --- Independence (transition counts) ---
+        n00 = ((hits[:-1] == 0) & (hits[1:] == 0)).sum()
+        n01 = ((hits[:-1] == 0) & (hits[1:] == 1)).sum()
+        n10 = ((hits[:-1] == 1) & (hits[1:] == 0)).sum()
+        n11 = ((hits[:-1] == 1) & (hits[1:] == 1)).sum()
+
+        pi_01 = n01 / (n00 + n01) if (n00 + n01) > 0 else 0.0
+        pi_11 = n11 / (n10 + n11) if (n10 + n11) > 0 else 0.0
+        pi_hat = (n01 + n11) / (n00 + n01 + n10 + n11)
+
+        def _safe_log(x):
+            return np.log(x) if x > 0 else 0.0
+
+        ll_restricted = (
+            (n00 + n10) * _safe_log(1 - pi_hat)
+            + (n01 + n11) * _safe_log(pi_hat)
+        )
+        ll_unrestricted = (
+            n00 * _safe_log(1 - pi_01)
+            + n01 * _safe_log(pi_01)
+            + n10 * _safe_log(1 - pi_11)
+            + n11 * _safe_log(pi_11)
+        )
+        lr_ind = -2 * (ll_restricted - ll_unrestricted)
+        pval_ind = 1 - chi2.cdf(lr_ind, df=1)
+
+        # --- Conditional coverage (joint test) ---
+        lr_cc = lr_uc + lr_ind
+        pval_cc = 1 - chi2.cdf(lr_cc, df=2)
+
+        return {
+            'segment': segment_name,
+            'n_observations': n,
+            'n_exceptions': int(v),
+            'exception_rate': p_hat,
+            'expected_exception_rate': p,
+            # Unconditional coverage
+            'lr_uc': lr_uc,
+            'pval_uc': pval_uc,
+            'reject_uc': pval_uc < 0.05,
+            # Independence
+            'lr_ind': lr_ind,
+            'pval_ind': pval_ind,
+            'reject_ind': pval_ind < 0.05,
+            'pi_01': pi_01,  # P(violation | no violation yesterday)
+            'pi_11': pi_11,  # P(violation | violation yesterday)
+            # Conditional coverage (joint)
+            'lr_cc': lr_cc,
+            'pval_cc': pval_cc,
+            'reject_cc': pval_cc < 0.05,
+        }
+
     def print_backtest_summary(self, results):
         """
         Print a formatted summary of backtesting results.
